@@ -58,7 +58,10 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Lara Croft and the Temple of Osiris", "Source\Games\Lara Croft and the Temple of Osiris\Lara Croft and the Temple of Osiris.vcxproj", "{F9E943B8-C7F9-4D0F-8C7D-96247449C7BE}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Mirror's Edge Catalyst", "Source\Games\Mirror's Edge Catalyst\Mirror's Edge Catalyst.vcxproj", "{3FA2F5A3-A442-4D06-8E63-003819CACFD8}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Just Cause 3", "Source\Games\Just Cause 3\Just Cause 3.vcxproj", "{67E4754D-609A-4713-B686-DBF6FBBBFC38}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WATCH_DOGS", "Source\Games\WATCH_DOGS\WATCH_DOGS.vcxproj", "{60E1758D-C547-4CDB-987D-7E564A01FB13}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -432,6 +435,22 @@ Global
 		{67E4754D-609A-4713-B686-DBF6FBBBFC38}.Test-Release|Win32.ActiveCfg = Test-Release|x64
 		{67E4754D-609A-4713-B686-DBF6FBBBFC38}.Test-Release|x64.ActiveCfg = Test-Release|x64
 		{67E4754D-609A-4713-B686-DBF6FBBBFC38}.Test-Release|x64.Build.0 = Test-Release|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Debug|Win32.ActiveCfg = Development-Debug|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Debug|Win32.Build.0 = Development-Debug|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Debug|x64.Build.0 = Development-Debug|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Release|Win32.ActiveCfg = Development-Release|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Release|Win32.Build.0 = Development-Release|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Release|x64.ActiveCfg = Development-Release|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Development-Release|x64.Build.0 = Development-Release|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Publishing-Release|Win32.ActiveCfg = Publishing-Release|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Publishing-Release|Win32.Build.0 = Publishing-Release|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Publishing-Release|x64.ActiveCfg = Publishing-Release|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Publishing-Release|x64.Build.0 = Publishing-Release|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Test-Release|Win32.ActiveCfg = Test-Release|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Test-Release|Win32.Build.0 = Test-Release|Win32
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Test-Release|x64.ActiveCfg = Test-Release|x64
+		{60E1758D-C547-4CDB-987D-7E564A01FB13}.Test-Release|x64.Build.0 = Test-Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -463,6 +482,7 @@ Global
 		{F9E943B8-C7F9-4D0F-8C7D-96247449C7BE} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{3FA2F5A3-A442-4D06-8E63-003819CACFD8} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{67E4754D-609A-4713-B686-DBF6FBBBFC38} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{60E1758D-C547-4CDB-987D-7E564A01FB13} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8B799422-BA66-3174-B21F-B9FA07C4B2E3}
