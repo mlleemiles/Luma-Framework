@@ -6,8 +6,9 @@
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 
 #include "..\..\Core\core.hpp"
-
 #include "..\..\Core\includes\shader_patching.h"
+#include "includes\safetyhook.hpp"
+#include "includes\hooks.hpp"
 
 namespace
 {
@@ -20,6 +21,36 @@ class WatchDogs2 final : public Game
 public:
    void OnInit(bool async) override
    {
+      HMODULE engine_module = nullptr;
+      while (!engine_module)
+      {
+         engine_module = GetModuleHandleA("Disrupt_64.dll");
+         Sleep(100);
+      }
+      auto base_addr = (uintptr_t)engine_module;
+      auto dos_header = reinterpret_cast<PIMAGE_DOS_HEADER>(engine_module);
+      auto nt_headers = reinterpret_cast<PIMAGE_NT_HEADERS>(reinterpret_cast<std::byte*>(engine_module) + dos_header->e_lfanew);
+      std::size_t section_size = nt_headers->OptionalHeader.SizeOfImage;
+      
+      auto WILDCARD = System::BytePattern(System::BytePattern::WildcardType::Wildcard);
+
+      std::vector<System::BytePattern> pattern = {
+         0x48, 0x89, 0x05,
+         WILDCARD, WILDCARD, WILDCARD, WILDCARD,
+         0x48, 0x8B, 0x87
+      };
+      
+      auto results = System::ScanMemoryForPattern(
+          reinterpret_cast<std::byte*>(engine_module),
+          section_size,
+          pattern
+      );
+
+      if (!results.empty())
+      {
+         AAOptionBase = ResolveRipRelative<uintptr_t>(results[0], 3, 7);
+      }
+      
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"ENABLE_DITHER", '0', true, false, "Allows disabling the game's 8 bit dithering effect (luma disables it by default as it's all HDR)"},
       };
@@ -199,6 +230,51 @@ public:
          "\nDICE (HDR tonemapper)"
          , "");
    }
+   
+   void PrintImGuiInfo(const DeviceData& device_data) override
+   {
+      ImGui::NewLine();
+
+      if (ImGui::BeginTable("aa_info", 2,
+          ImGuiTableFlags_BordersInnerH |
+          ImGuiTableFlags_RowBg |
+          ImGuiTableFlags_SizingStretchProp))
+      {
+         ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableHeadersRow();
+
+         // AA Option
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("AA Option");
+         ImGui::TableSetColumnIndex(1);
+
+         if (AAOptionBase && *AAOptionBase)
+         {
+            AAOptions aa = GetAAOption();
+
+            const char* aa_str = "Unknown";
+            switch (aa)
+            {
+            case OPTION_NO_AA:    aa_str = "No AA"; break;
+            case OPTION_FXAA:     aa_str = "FXAA"; break;
+            case OPTION_SMAA:     aa_str = "SMAA"; break;
+            case OPTION_SMAA_T2X: aa_str = "SMAA T2X"; break;
+            default: break;
+            }
+
+            ImGui::Text("%s (%d)", aa_str, static_cast<int>(aa));
+         }
+         else
+         {
+            ImGui::TextUnformatted("N/A");
+         }
+
+         ImGui::EndTable();
+      }
+   }
+   
 };
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
