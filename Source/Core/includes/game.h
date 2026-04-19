@@ -55,9 +55,9 @@ public:
 
    // Called for every game's valid draw call (any type),
    // this is where you can override passes, add new ones, cancel other ones etc.
-   // Requires "ENABLE_POST_DRAW_CALLBACK" to be enabled, given it has a performance impact.
+   // Requires "ENABLE_POST_DRAW_DISPATCH_CALLBACK" to be enabled, given it has a performance impact.
    // Return true to cancel the original call.
-   // Use "original_draw_dispatch_func" to call the original draw/dispatch within your function (you have to cancel it manually if you do so, as that's not tracked). This is useful if you want to add any post draw/dispatch behaviour. "ENABLE_POST_DRAW_CALLBACK" is required for the it to work. Note that some advanced debugging behaviours might conflict if you replace the draw call.
+   // Use "original_draw_dispatch_func" to call the original draw/dispatch within your function (you have to cancel it manually if you do so, as that's not tracked). This is useful if you want to add any post draw/dispatch behaviour. "ENABLE_POST_DRAW_DISPATCH_CALLBACK" is required for the it to work. Note that some advanced debugging behaviours might conflict if you replace the draw call.
    virtual DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func = nullptr) { return DrawOrDispatchOverrideType::None; }
    // This is called every frame just before sending out the final image to the display (the swapchain).
    // You can reliable reset any per frame setting here.

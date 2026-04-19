@@ -3,7 +3,7 @@
 // TODO: delete after testing (it doesn't seem to be needed!)
 #define ENABLE_SHADER_CLASS_INSTANCES 1
 
-#define ENABLE_POST_DRAW_CALLBACK 1
+#define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 
@@ -234,7 +234,7 @@ public:
             {
                ASSERT_ONCE(original_shader_hashes.Contains(pixel_shader_hashes_SubtractiveBackground)); // Make sure we didn't miss any, otherwise we should probably double check the results!
 
-               // This game needs post draw callbacks to fix up subtractive blends with FLOAT render targets (ENABLE_POST_DRAW_CALLBACK)
+               // This game needs post draw callbacks to fix up subtractive blends with FLOAT render targets (ENABLE_POST_DRAW_DISPATCH_CALLBACK)
                // Sure, using R11G11B10_FLOAT (unsigned) would have been easier to fix this, but the quality wouldn't be the same
                if (original_draw_dispatch_func && *original_draw_dispatch_func)
                {

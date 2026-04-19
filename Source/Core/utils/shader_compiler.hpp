@@ -311,7 +311,7 @@ namespace Shader
                s << ", parent: " << pParentData;
                s << ")";
             }
-            return -1; // Error
+            return E_FAIL; // Error
          }
 
          return S_OK;

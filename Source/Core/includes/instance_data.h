@@ -289,6 +289,75 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
       any_upgraded_cs_uavs = std::any_of(cs_uavs_state.begin(), cs_uavs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
    }
 
+   static void SetConstantBuffers(ID3D11DeviceContext* device_context, reshade::api::shader_stage stages, uint32_t slot, ID3D11Buffer* const buffers, uint32_t num = 1)
+   {
+      if ((stages & reshade::api::shader_stage::vertex) == reshade::api::shader_stage::vertex)
+         device_context->VSSetConstantBuffers(slot, num, &buffers);
+      if ((stages & reshade::api::shader_stage::geometry) == reshade::api::shader_stage::geometry)
+         device_context->GSSetConstantBuffers(slot, num, &buffers);
+      if ((stages & reshade::api::shader_stage::pixel) == reshade::api::shader_stage::pixel)
+         device_context->PSSetConstantBuffers(slot, num, &buffers);
+      if ((stages & reshade::api::shader_stage::compute) == reshade::api::shader_stage::compute)
+         device_context->CSSetConstantBuffers(slot, num, &buffers);
+   }
+
+#if ENABLE_AUTO_CBUFFER_RESTORATION
+   com_ptr<ID3D11Buffer> original_constant_buffers[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+   UINT original_constant_buffers_first_constant[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+   UINT original_constant_buffers_num_constant[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+
+   void ClearOriginalConstantBuffers()
+   {
+      for (auto& original_constant_buffers_stage : original_constant_buffers)
+         for (auto& original_constant_buffer : original_constant_buffers_stage)
+            original_constant_buffer.reset();
+
+      std::fill_n(&original_constant_buffers_first_constant[0][0], sizeof(original_constant_buffers_first_constant) / sizeof(UINT), 0);
+      std::fill_n(&original_constant_buffers_num_constant[0][0], sizeof(original_constant_buffers_num_constant) / sizeof(UINT), 4096);
+   }
+
+   void RestoreOriginalConstantBuffers(ID3D11DeviceContext* device_context)
+   {
+      auto SetOriginalConstantBuffersStage = [&](ID3D11DeviceContext* device_context, bool use_device_context_1, Shader::Stage stage)
+      {
+         const size_t stage_index = (size_t)stage;
+         ID3D11Buffer* const* original_constant_buffers_const = reinterpret_cast<ID3D11Buffer* const*>(original_constant_buffers[stage_index]);
+         if (use_device_context_1)
+         {
+            if (stage == Shader::Stage::Vertex)
+               static_cast<ID3D11DeviceContext1*>(device_context)->VSSetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const, original_constant_buffers_first_constant[stage_index], original_constant_buffers_num_constant[stage_index]);
+            else if (stage == Shader::Stage::Geometry)
+               static_cast<ID3D11DeviceContext1*>(device_context)->GSSetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const, original_constant_buffers_first_constant[stage_index], original_constant_buffers_num_constant[stage_index]);
+            else if (stage == Shader::Stage::Pixel)
+               static_cast<ID3D11DeviceContext1*>(device_context)->PSSetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const, original_constant_buffers_first_constant[stage_index], original_constant_buffers_num_constant[stage_index]);
+            else if (stage == Shader::Stage::Compute)
+               static_cast<ID3D11DeviceContext1*>(device_context)->CSSetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const, original_constant_buffers_first_constant[stage_index], original_constant_buffers_num_constant[stage_index]);
+            return;
+         }
+         if (stage == Shader::Stage::Vertex)
+            device_context->VSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const);
+         else if (stage == Shader::Stage::Geometry)
+            device_context->GSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const);
+         else if (stage == Shader::Stage::Pixel)
+            device_context->PSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const);
+         else if (stage == Shader::Stage::Compute)
+            device_context->CSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const);
+      };
+
+      com_ptr<ID3D11DeviceContext1> device_context_1;
+      device_context->QueryInterface(&device_context_1);
+      const bool use_device_context_1 = device_context_1 != nullptr;
+      for (uint8_t stage = 0; stage < (uint8_t)Shader::Stage::Count; stage++)
+      {
+#if !GEOMETRY_SHADER_SUPPORT // Note: we assume the mod didn't modify geometry shaders bindings if "GEOMETRY_SHADER_SUPPORT" is false. It's an optimization.
+         if (stage == (uint8_t)Shader::Stage::Geometry)
+            continue;
+#endif
+         SetOriginalConstantBuffersStage(device_context, use_device_context_1, static_cast<Shader::Stage>(stage));
+      }
+   }
+#endif // ENABLE_AUTO_CBUFFER_RESTORATION
+
 #if DEVELOPMENT
    std::shared_mutex mutex_trace;
    std::vector<TraceDrawCallData> trace_draw_calls_data;

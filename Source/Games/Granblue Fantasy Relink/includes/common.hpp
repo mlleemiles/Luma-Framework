@@ -1,5 +1,19 @@
 #pragma once
 
+struct GBFRBufferInfo
+{
+   ComPtr<ID3D11Buffer> buffer;
+   UINT num_constants = 0;
+   UINT first_constant = 0;
+
+   void Reset()
+   {
+      buffer = nullptr;
+      num_constants = 0;
+      first_constant = 0;
+   }
+};
+
 #include "upscale.hpp"
 #include "postprocess.hpp"
 #include "ui_scale.hpp"
@@ -23,10 +37,6 @@ struct GameDeviceDataGBFR final : public GameDeviceData, public GBFRUpscaleState
    std::atomic<bool> taa_running_cached = false;
    UIScaleState ui_scale;
    std::atomic<ID3D11DeviceContext*> tonemap_detected_context = nullptr;
-   // The first device context observed to be drawing UI (identified by blend state) — cached for the remainder of the frame.
-   std::atomic<ID3D11DeviceContext*> ui_detected_context = nullptr;
-   // Command list created from the cached UI deferred context during FinishCommandList.
-   std::atomic<ID3D11CommandList*> ui_finish_command_list = nullptr;
 
 #if TEST || DEVELOPMENT
    bool taa_detected_this_frame = false;
@@ -82,6 +92,8 @@ struct GBFRShaderHashes
    ShaderHashesList<false> cutscene_color_grade;
    ShaderHashesList<false> cutscene_overlay_blend;
    ShaderHashesList<false> cutscene_overlay_modulate;
+   ShaderHashesList<false> bloom;
+   ShaderHashesList<false> ui_background_downscale;
    ShaderHashesList<false> output;
 };
 
@@ -91,27 +103,31 @@ struct GBFRRuntimeSettings
    bool render_scale_changed = false;
 };
 
-extern GBFRShaderHashes g_shader_hashes;
-extern GBFRRuntimeSettings g_runtime_settings;
+inline GBFRShaderHashes g_shader_hashes;
+inline GBFRRuntimeSettings g_runtime_settings;
 
-extern ShaderHashesList<false>& shader_hashes_OutlinePrefilter;
-extern ShaderHashesList<false>& shader_hashes_OutlineCS;
-extern ShaderHashesList<false>& shader_hashes_Temporal_Upscale;
-extern ShaderHashesList<false>& shader_hashes_TAA;
-extern ShaderHashesList<false>& shader_hashes_Tonemap;
-extern ShaderHashesList<false>& shader_hashes_MotionBlur;
-extern ShaderHashesList<false>& shader_hashes_MotionBlurDenoise;
-extern ShaderHashesList<false>& shader_hashes_CutsceneGamma;
-extern ShaderHashesList<false>& shader_hashes_CutsceneColorGrade;
-extern ShaderHashesList<false>& shader_hashes_CutsceneOverlayBlend;
-extern ShaderHashesList<false>& shader_hashes_CutsceneOverlayModulate;
-extern ShaderHashesList<false>& shader_hashes_Output;
+inline auto& shader_hashes_OutlinePrefilter = g_shader_hashes.outline_prefilter;
+inline auto& shader_hashes_OutlineCS = g_shader_hashes.outline_cs;
+inline auto& shader_hashes_Temporal_Upscale = g_shader_hashes.temporal_upscale;
+inline auto& shader_hashes_TAA = g_shader_hashes.taa;
+inline auto& shader_hashes_Tonemap = g_shader_hashes.tonemap;
+inline auto& shader_hashes_MotionBlur = g_shader_hashes.motion_blur;
+inline auto& shader_hashes_MotionBlurDenoise = g_shader_hashes.motion_blur_denoise;
+inline auto& shader_hashes_CutsceneGamma = g_shader_hashes.cutscene_gamma;
+inline auto& shader_hashes_CutsceneColorGrade = g_shader_hashes.cutscene_color_grade;
+inline auto& shader_hashes_CutsceneOverlayBlend = g_shader_hashes.cutscene_overlay_blend;
+inline auto& shader_hashes_CutsceneOverlayModulate = g_shader_hashes.cutscene_overlay_modulate;
+inline auto& shader_hashes_Bloom = g_shader_hashes.bloom;
+inline auto& shader_hashes_Output = g_shader_hashes.output;
+inline auto& shader_hashes_UIBackgroundDownscale = g_shader_hashes.ui_background_downscale;
 
-extern float& render_scale;
-extern bool& render_scale_changed;
+inline auto& render_scale = g_runtime_settings.render_scale;
+inline auto& render_scale_changed = g_runtime_settings.render_scale_changed;
 
 bool CreateOrRecreateTextureIfNeeded(GameDeviceDataGBFR& game_device_data, ID3D11Device* native_device, D3D11_TEXTURE2D_DESC desc, ComPtr<ID3D11Texture2D>& texture);
 bool CreateOrRecreateTextureIfNeeded(GameDeviceDataGBFR& game_device_data, ID3D11Device* native_device, D3D11_TEXTURE2D_DESC desc, ComPtr<ID3D11Texture2D>& texture, ComPtr<ID3D11ShaderResourceView>& srv);
 bool CreateOrRecreateTextureIfNeeded(GameDeviceDataGBFR& game_device_data, ID3D11Device* native_device, D3D11_TEXTURE2D_DESC desc, ComPtr<ID3D11Texture2D>& texture, ComPtr<ID3D11ShaderResourceView>& srv, ComPtr<ID3D11RenderTargetView>& rtv);
+bool IsTonemapAfterTAAEnabled(bool require_taa_running = false);
+void RefreshFrameJitterForPostProcess(GameDeviceDataGBFR& game_device_data);
 ID3D11ShaderResourceView* GetPostAAColorInputSRV(const DeviceData& device_data, const GameDeviceDataGBFR& game_device_data);
 bool CanDrawNativeUIEncodePass(ID3D11ShaderResourceView* input_color_srv, const GameDeviceDataGBFR& game_device_data);

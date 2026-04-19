@@ -40,5 +40,5 @@ public:
 
 private:
    std::atomic<std::thread::id> owner;
-   int count;
+   int count = 0;
 };

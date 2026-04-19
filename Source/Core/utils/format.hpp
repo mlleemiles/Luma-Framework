@@ -1042,12 +1042,12 @@ namespace
       return name ? name : "Unknown";
    }
 
-   const char* GetBlendName(D3D11_BLEND blend)
+   const char* GetBlendName(D3D11_BLEND blend, bool numerical = false)
    {
       switch (blend)
       {
-      case D3D11_BLEND_ZERO:             return "ZERO";
-      case D3D11_BLEND_ONE:              return "ONE";
+      case D3D11_BLEND_ZERO:             return numerical ? "0" : "ZERO";
+      case D3D11_BLEND_ONE:              return numerical ? "1" : "ONE";
       case D3D11_BLEND_SRC_COLOR:        return "SRC_COLOR";
       case D3D11_BLEND_INV_SRC_COLOR:    return "INV_SRC_COLOR";
       case D3D11_BLEND_SRC_ALPHA:        return "SRC_ALPHA";
@@ -1077,6 +1077,19 @@ namespace
       case D3D11_BLEND_OP_MIN:          return "MIN";
       case D3D11_BLEND_OP_MAX:          return "MAX";
       default:                          return "UNKNOWN";
+      }
+   }
+
+   const char* GetBlendOpSigns(D3D11_BLEND_OP blend_op)
+   {
+      switch (blend_op)
+      {
+      case D3D11_BLEND_OP_ADD:          return "+";
+      case D3D11_BLEND_OP_SUBTRACT:     return "-";
+      case D3D11_BLEND_OP_REV_SUBTRACT: return "-";
+      case D3D11_BLEND_OP_MIN:          return "min";
+      case D3D11_BLEND_OP_MAX:          return "max";
+      default:                          return "";
       }
    }
 

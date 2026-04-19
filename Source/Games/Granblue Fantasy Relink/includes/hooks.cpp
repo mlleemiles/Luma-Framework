@@ -24,6 +24,13 @@ void OnJitterWrite(safetyhook::Context& ctx)
    g_hook_globals.table_jitter_x_bits.store(static_cast<uint32_t>(ctx.rcx), std::memory_order_release);
    g_hook_globals.table_jitter_y_bits.store(static_cast<uint32_t>(ctx.rax), std::memory_order_release);
    g_hook_globals.table_jitter_valid.store(true, std::memory_order_release);
+#ifdef PATCH_JITTER_TABLE_INIT
+   // ctx.rsi = TemporalAntiAliasingComponent* (this); jitter_phase_index at +0x24 is written by
+   // 'mov [rsi+24h], cl' at 0x141A9EB77, four instructions before this hook fires at kJitterWrite_RVA.
+   // This is definitively the index used to look up the table entry that was just written to the camera.
+   const auto phase = *reinterpret_cast<const uint8_t*>(ctx.rsi + kTAAJitterPhaseIndexOffset);
+   g_hook_globals.cached_jitter_phase_idx.store(phase, std::memory_order_release);
+#endif
 }
 
 bool TryReadTableJitter(float2& out_jitter)
@@ -37,11 +44,44 @@ bool TryReadTableJitter(float2& out_jitter)
    return true;
 }
 
+#ifdef PATCH_JITTER_TABLE_INIT
+constexpr std::array<float2, JITTER_PHASES> precomputed_jitters = []()
+{
+   std::array<float2, JITTER_PHASES> entries{};
+   for (unsigned int i = 0; i < entries.size(); i++)
+      entries[i] = float2{SR::HaltonSequence(i, 2), SR::HaltonSequence(i, 3)};
+   return entries;
+}();
+
+bool TryReadTableJitterFromCounter(float2& out_jitter)
+{
+   // Use the phase index cached by OnJitterWrite rather than g_frame_counter.
+   // g_frame_counter is incremented by GBFR_CameraProjectionData_BulkUpdate_Caller on the
+   // game-logic thread (lock inc @ 0x14019F6AA) one frame ahead of the render thread, causing
+   // an off-by-one. cached_jitter_phase_idx is captured from ctx.rsi+0x24 at the exact
+   // moment the camera write fires — always in sync regardless of TAA component lifecycle.
+   if (!g_hook_globals.table_jitter_valid.load(std::memory_order_acquire))
+      return false;
+   const uint8_t phase_idx = g_hook_globals.cached_jitter_phase_idx.load(std::memory_order_acquire);
+   out_jitter = precomputed_jitters[phase_idx % JITTER_PHASES];
+   return true;
+}
+
+static void __fastcall Hooked_TemporalAntiAliasingComponentInit(void* self)
+{
+   g_taa_init_hook.call<void>(self);
+   auto* table = reinterpret_cast<float2*>(reinterpret_cast<uint8_t*>(self) + kTAAJitterTableOffset);
+   for (size_t i = 0; i < kTAAJitterTableCount; i++)
+      table[i] = precomputed_jitters[i % JITTER_PHASES];
+}
+#endif
+
 void PatchJitterPhases()
 {
    static_assert((JITTER_PHASES & (JITTER_PHASES - 1)) == 0, "JITTER_PHASES must be a power of 2");
    static_assert(JITTER_PHASES >= 1 && JITTER_PHASES <= 64, "JITTER_PHASES must be between 1 and 64");
 
+#ifndef PATCH_JITTER_TABLE_INIT
    const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
    if (base_addr == 0)
       return;
@@ -59,6 +99,7 @@ void PatchJitterPhases()
       *byte_ptr = mask;
       VirtualProtect(byte_ptr, 1, old_protect, &old_protect);
    }
+#endif
 }
 
 bool IsTAARunningThisFrame()
@@ -292,33 +333,6 @@ void STDMETHODCALLTYPE Hooked_VSSetConstantBuffers1_Deferred(
    const UINT* pFirstConstant,
    const UINT* pNumConstants)
 {
-#if PATCH_SCENE_BUFFER
-   if (StartSlot == 0 && NumBuffers >= 1 && ppConstantBuffers && ppConstantBuffers[0] &&
-       pFirstConstant && pNumConstants && pNumConstants[0] == 48)
-   {
-      DeviceData* device_data = g_device_data_ptr.load(std::memory_order_acquire);
-      if (device_data)
-      {
-         auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data->game);
-         const UINT current_first_constant = pFirstConstant[0];
-
-         {
-            std::lock_guard<std::mutex> lock(game_device_data.scene_buffer_bindings_mutex);
-            game_device_data.scene_buffer_offsets_this_frame.insert(current_first_constant);
-         }
-
-         bool expected = false;
-         if (game_device_data.scene_buffer_collect_guard.compare_exchange_strong(expected, true, std::memory_order_relaxed))
-         {
-            game_device_data.pending_scene_buffer = ppConstantBuffers[0];
-            game_device_data.pending_first_constant = current_first_constant;
-            game_device_data.pending_num_constants = pNumConstants[0];
-            game_device_data.scene_buffer_info_collected.store(true, std::memory_order_release);
-         }
-      }
-   }
-#endif
-
    g_VSSetConstantBuffers1_hook_deferred.unsafe_call<void>(
       pContext, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants);
 }

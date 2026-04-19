@@ -11,12 +11,20 @@ struct GBFRHookGlobals
    SafetyHookInline dispatch_viewport_hook;
    safetyhook::MidHook jitter_write_hook;
    safetyhook::MidHook ui_orchestrator_hook;
+#ifdef PATCH_JITTER_TABLE_INIT
+   SafetyHookInline taa_init_hook;
+#endif
 
    std::atomic<DeviceData*> device_data_ptr = nullptr;
    std::atomic<ID3D11Device*> native_device_ptr = nullptr;
    std::atomic<uint32_t> table_jitter_x_bits{0};
    std::atomic<uint32_t> table_jitter_y_bits{0};
    std::atomic<bool> table_jitter_valid{false};
+#ifdef PATCH_JITTER_TABLE_INIT
+   // Cached by OnJitterWrite from ctx.rsi+kTAAJitterPhaseIndexOffset (TemporalAntiAliasingComponent::jitter_phase_index).
+   // Written atomically at the same moment the camera receives its jitter — always in sync, no global pointer dependency.
+   std::atomic<uint8_t> cached_jitter_phase_idx{0};
+#endif
    // UI render orchestrator (sub_143222A10) first arg — the UI state object pointer.
    // Updated every frame via mid-hook; used by Hooked_DispatchRenderPassViewport to
    // identify which GBFR_DispatchRenderPassViewport calls originate from the UI pipeline.
@@ -45,6 +53,10 @@ constexpr uintptr_t kJitterPhaseCounter_RVA = 0x05E61790;
 constexpr uintptr_t kJitterPhaseMask_CL_RVA = 0x01A9EB76;
 constexpr uintptr_t kJitterPhaseMask_EAX_RVA = 0x01A9EB7C;
 constexpr uintptr_t kJitterWrite_RVA = 0x01A9EB9B;
+constexpr uintptr_t kTemporalAntiAliasingComponent_Init_RVA = 0x01A9E5D0;
+constexpr uintptr_t kTAAJitterTableOffset = 0x28;
+constexpr uintptr_t kTAAJitterPhaseIndexOffset = 0x24; // this->jitter_phase_index; written by Trans at same time as camera write (mov [rsi+24h], cl @ 0x141A9EB77)
+constexpr size_t kTAAJitterTableCount = 64;
 
 inline GBFRHookGlobals g_hook_globals;
 inline auto& g_rt_creation_hook = g_hook_globals.rt_creation_hook;
@@ -54,6 +66,9 @@ inline auto& g_VSSetConstantBuffers1_hook_deferred = g_hook_globals.vs_set_const
 inline auto& g_dispatch_viewport_hook = g_hook_globals.dispatch_viewport_hook;
 inline auto& g_jitter_write_hook = g_hook_globals.jitter_write_hook;
 inline auto& g_ui_orchestrator_hook = g_hook_globals.ui_orchestrator_hook;
+#ifdef PATCH_JITTER_TABLE_INIT
+inline auto& g_taa_init_hook = g_hook_globals.taa_init_hook;
+#endif
 inline auto& g_device_data_ptr = g_hook_globals.device_data_ptr;
 inline auto& g_native_device_ptr = g_hook_globals.native_device_ptr;
 
@@ -62,6 +77,10 @@ void OnJitterWrite(safetyhook::Context& ctx);
 void OnUIRenderOrchestratorEntry(safetyhook::Context& ctx);
 bool TryReadTableJitter(float2& out_jitter);
 void PatchJitterPhases();
+#ifdef PATCH_JITTER_TABLE_INIT
+bool TryReadTableJitterFromCounter(float2& out_jitter);
+void __fastcall Hooked_TemporalAntiAliasingComponentInit(void* self);
+#endif
 bool IsTAARunningThisFrame();
 void* GetVTableFunction(void* obj, size_t index);
 

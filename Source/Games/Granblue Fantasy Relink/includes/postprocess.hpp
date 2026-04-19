@@ -1,12 +1,5 @@
 #pragma once
 
-struct GBFRBufferInfo
-{
-   ComPtr<ID3D11Buffer> buffer;
-   UINT num_constants = 0;
-   UINT first_constant = 0;
-};
-
 struct GBFRCutsceneOverlayModulateReplayState
 {
    static constexpr UINT kCapturedVertexBufferCount = 2;
@@ -33,12 +26,8 @@ struct GBFRCutsceneOverlayModulateReplayState
       }
       vertex_buffer_strides.fill(0);
       vertex_buffer_offsets.fill(0);
-      vs_constant_buffer_slot1.buffer = nullptr;
-      vs_constant_buffer_slot1.num_constants = 0;
-      vs_constant_buffer_slot1.first_constant = 0;
-      ps_constant_buffer_slot1.buffer = nullptr;
-      ps_constant_buffer_slot1.num_constants = 0;
-      ps_constant_buffer_slot1.first_constant = 0;
+      vs_constant_buffer_slot1.Reset();
+      ps_constant_buffer_slot1.Reset();
    }
 };
 
@@ -61,6 +50,7 @@ struct GBFRCutsceneOverlayBlendReplayState
    {
       valid = false;
       vertex_shader = nullptr;
+      pixel_shader = nullptr;
       input_layout = nullptr;
       for (auto& buffer : vertex_buffers)
       {
@@ -68,12 +58,8 @@ struct GBFRCutsceneOverlayBlendReplayState
       }
       vertex_buffer_strides.fill(0);
       vertex_buffer_offsets.fill(0);
-      vs_constant_buffer_slot1.buffer = nullptr;
-      vs_constant_buffer_slot1.num_constants = 0;
-      vs_constant_buffer_slot1.first_constant = 0;
-      ps_constant_buffer_slot1.buffer = nullptr;
-      ps_constant_buffer_slot1.num_constants = 0;
-      ps_constant_buffer_slot1.first_constant = 0;
+      vs_constant_buffer_slot1.Reset();
+      ps_constant_buffer_slot1.Reset();
       ps_shader_resource_slot1 = nullptr;
    }
 };
@@ -110,12 +96,8 @@ struct GBFRMotionBlurReplayState
       }
       vertex_buffer_strides.fill(0);
       vertex_buffer_offsets.fill(0);
-      ps_cbuffer_b10.buffer = nullptr;
-      ps_cbuffer_b10.num_constants = 0;
-      ps_cbuffer_b10.first_constant = 0;
-      ps_cbuffer_b12.buffer = nullptr;
-      ps_cbuffer_b12.num_constants = 0;
-      ps_cbuffer_b12.first_constant = 0;
+      ps_cbuffer_b10.Reset();
+      ps_cbuffer_b12.Reset();
       ps_srv_t0 = nullptr;
       ps_srv_t1 = nullptr;
       ps_srv_t4 = nullptr;
@@ -169,9 +151,7 @@ struct GBFRCutscenePostPassReplayState
       valid = false;
       vertex_shader = nullptr;
       pixel_shader = nullptr;
-      ps_constant_buffer_slot1.buffer = nullptr;
-      ps_constant_buffer_slot1.num_constants = 0;
-      ps_constant_buffer_slot1.first_constant = 0;
+      ps_constant_buffer_slot1.Reset();
       ps_sampler_slot0 = nullptr;
    }
 };

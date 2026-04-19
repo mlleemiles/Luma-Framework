@@ -5,6 +5,8 @@
 
 #define DISABLE_FOCUS_LOSS_SUPPRESSION 1
 
+#define AVOID_INPUT_LOSS 1
+
 #include "..\..\Core\core.hpp"
 
 class MirrorsEdgeCatalyst final : public Game // ### Rename this to your game's name ###

@@ -40,18 +40,20 @@ static void EnsureScaledTexture(DeviceData& device_data, GameDeviceDataGBFR& gam
 // On first detection, copies the scene to an output-resolution texture with
 // bilinear filtering and redirects the render target + viewport.
 // Returns true when the draw is part of the UI phase.
-static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx)
+static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, const ShaderHashesList<true>& original_shader_hashes)
 {
    auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data.game);
    auto& ui_scale = game_device_data.ui_scale;
 
-   const ID3D11DeviceContext* ui_ctx = game_device_data.ui_detected_context.load(std::memory_order_acquire);
+   const ID3D11DeviceContext* ui_ctx = game_device_data.ui_scale.ui_detected_context.load(std::memory_order_acquire);
    if (ui_ctx != nullptr)
    {
       if (ui_ctx == ctx)
          return true;
       // Different context — fall through to check blend state.
    }
+   if (!original_shader_hashes.Contains(shader_hashes_UIBackgroundDownscale))
+      return false;
 
    // --- Blend state check (any alpha blending) ---
    com_ptr<ID3D11BlendState> blend_state;
@@ -88,7 +90,6 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx)
    // The last case covers the pause-game UI path where the game copies a previous
    // scene frame (already at output resolution and in the upgraded RGBA16F format)
    // as the background before drawing UI on top.
-   bool srv_matches = false;
    com_ptr<ID3D11ShaderResourceView> srv;
    ctx->PSGetShaderResources(0, 1, &srv);
    if (srv.get())
@@ -96,136 +97,59 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx)
       D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
       srv->GetDesc(&srv_desc);
       const DXGI_FORMAT fmt = srv_desc.Format;
-      srv_matches = (fmt == DXGI_FORMAT_BC7_UNORM || fmt == DXGI_FORMAT_BC4_UNORM);
-      if (!srv_matches && (fmt == DXGI_FORMAT_R8G8B8A8_UNORM || fmt == DXGI_FORMAT_R16G16B16A16_FLOAT))
+      bool srv_matches = false;
+      if (fmt == DXGI_FORMAT_R16G16B16A16_FLOAT)
       {
          com_ptr<ID3D11Resource> srv_resource;
          srv->GetResource(&srv_resource);
          com_ptr<ID3D11Texture2D> srv_texture;
          srv_resource->QueryInterface(&srv_texture);
+
          if (srv_texture)
          {
             D3D11_TEXTURE2D_DESC tex_desc;
             srv_texture->GetDesc(&tex_desc);
-            if (fmt == DXGI_FORMAT_R8G8B8A8_UNORM)
-               srv_matches = (tex_desc.Width == 1 && tex_desc.Height == 1);
-            else // RGBA16F: accept only if sized to output resolution
-               srv_matches = (tex_desc.Width == static_cast<UINT>(device_data.output_resolution.x) &&
-                              tex_desc.Height == static_cast<UINT>(device_data.output_resolution.y));
+            UINT width = static_cast<UINT>(device_data.output_resolution.x);
+            UINT height = static_cast<UINT>(device_data.output_resolution.y);
+            if (tex_desc.Width != width && tex_desc.Height != height)
+               return false;
          }
       }
    }
-   if (!srv_matches)
-      return false;
 
    ASSERT_ONCE(ui_ctx == nullptr);
 
-   // ---------------------------------------------------------------
-   // First UI draw detected — set up the bilinear copy to output res.
-   // The context is NOT cached yet so the copy draw won't re-enter
-   // the redirect path (its blend state is disabled, which also fails
-   // the blend check above).
-   // ---------------------------------------------------------------
+   game_device_data.ui_scale.ui_detected_context.store(ctx, std::memory_order_release);
 
-   com_ptr<ID3D11RenderTargetView> current_rtv;
-   ctx->OMGetRenderTargets(1, &current_rtv, nullptr);
-   if (!current_rtv)
+   ui_scale.ui_phase_seen_this_frame = true;
+
+   com_ptr<ID3D11RenderTargetView> ui_rtv;
+   ctx->OMGetRenderTargets(1, &ui_rtv, nullptr);
+   if (!ui_rtv)
    {
-      game_device_data.ui_detected_context.store(ctx, std::memory_order_release);
       return true;
    }
 
-   com_ptr<ID3D11Resource> rtv_resource;
-   current_rtv->GetResource(&rtv_resource);
-   com_ptr<ID3D11Texture2D> scene_texture;
-   rtv_resource->QueryInterface(&scene_texture);
-   if (!scene_texture)
+   com_ptr<ID3D11Resource> ui_rtv_resource;
+   ui_rtv->GetResource(&ui_rtv_resource);
+   com_ptr<ID3D11Texture2D> ui_rtv_texture;
+   ui_rtv_resource->QueryInterface(&ui_rtv_texture);
+   if (!ui_rtv_texture)
    {
-      game_device_data.ui_detected_context.store(ctx, std::memory_order_release);
       return true;
    }
 
-   D3D11_TEXTURE2D_DESC scene_desc;
-   scene_texture->GetDesc(&scene_desc);
-
-   const UINT out_w = static_cast<UINT>(device_data.output_resolution.x);
-   const UINT out_h = static_cast<UINT>(device_data.output_resolution.y);
-
-   EnsureScaledTexture(device_data, game_device_data);
-
-   if (!ui_scale.scaled_texture_rtv)
+   D3D11_TEXTURE2D_DESC ui_rtv_texture_desc;
+   ui_rtv_texture->GetDesc(&ui_rtv_texture_desc);
+   if (ui_rtv_texture_desc.Width == static_cast<UINT>(device_data.output_resolution.x) &&
+       ui_rtv_texture_desc.Height == static_cast<UINT>(device_data.output_resolution.y))
    {
-      game_device_data.ui_detected_context.store(ctx, std::memory_order_release);
       return true;
    }
+   ui_scale.ui_scaled_needed = true;
 
    // Store the original scene texture for later comparison.
-   ui_scale.original_scene_texture = scene_texture.get();
-
-   // Create a temporary SRV for the original scene so the copy shader can read it.
-   ui_scale.original_scene_srv = nullptr;
-   {
-      D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc_create = {};
-      srv_desc_create.Format = scene_desc.Format;
-      srv_desc_create.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-      srv_desc_create.Texture2D.MipLevels = 1;
-      srv_desc_create.Texture2D.MostDetailedMip = 0;
-      HRESULT hr = device_data.native_device->CreateShaderResourceView(
-         scene_texture.get(), &srv_desc_create, ui_scale.original_scene_srv.put());
-      if (FAILED(hr) || !ui_scale.original_scene_srv)
-      {
-         game_device_data.ui_detected_context.store(ctx, std::memory_order_release);
-         return true;
-      }
-   }
-
-   // Look up the native shaders for the bilinear copy.
-   const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("GBFR Fullscreen UV VS"));
-   const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR UI Background Copy"));
-   if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second ||
-       ps_it == device_data.native_pixel_shaders.end() || !ps_it->second)
-   {
-      game_device_data.ui_detected_context.store(ctx, std::memory_order_release);
-      return true;
-   }
-
-   // Save full graphics state, draw the bilinear copy, then restore.
-   {
-      DrawStateStack<DrawStateStackType::FullGraphics> state_stack;
-      state_stack.Cache(ctx, device_data.uav_max_count);
-
-      // Unbind the original RT so it can be read as SRV.
-      ctx->OMSetRenderTargets(0, nullptr, nullptr);
-
-      ID3D11RenderTargetView* const scaled_rtv = ui_scale.scaled_texture_rtv.get();
-      ctx->OMSetRenderTargets(1, &scaled_rtv, nullptr);
-
-      ID3D11ShaderResourceView* const scene_srv = ui_scale.original_scene_srv.get();
-      ctx->PSSetShaderResources(0, 1, &scene_srv);
-
-      ID3D11SamplerState* const linear_sampler = device_data.sampler_state_linear.get();
-      ctx->PSSetSamplers(0, 1, &linear_sampler);
-
-      D3D11_VIEWPORT vp = {};
-      vp.Width = static_cast<float>(out_w);
-      vp.Height = static_cast<float>(out_h);
-      ctx->RSSetViewports(1, &vp);
-
-      ctx->OMSetBlendState(device_data.default_blend_state.get(), nullptr, 0xFFFFFFFF);
-      ctx->OMSetDepthStencilState(device_data.default_depth_stencil_state.get(), 0);
-
-      ctx->VSSetShader(vs_it->second.get(), nullptr, 0);
-      ctx->PSSetShader(ps_it->second.get(), nullptr, 0);
-      ctx->IASetInputLayout(nullptr);
-      ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-      ctx->Draw(4, 0);
-
-      // Restore state so the Redirect call below can compare properly.
-      state_stack.Restore(ctx);
-   }
-
-   // Now cache the context — subsequent draws will take the fast path.
-   game_device_data.ui_detected_context.store(ctx, std::memory_order_release);
+   ui_scale.original_ui_rtv = ui_rtv.get();
 
    // Fall through to the redirect for this first UI draw.
    return true;
@@ -244,21 +168,17 @@ static void RedirectUIDrawToScaledTarget(
    if (!ui_scale.scaled_texture_srv)
       return;
 
+   if (!ui_scale.ui_scaled_needed)
+      return;
+
    // --- Render target redirect ---
    {
       com_ptr<ID3D11RenderTargetView> current_rtv;
       ctx->OMGetRenderTargets(1, &current_rtv, nullptr);
-      if (current_rtv)
+      if (AreViewsOfSameResource(ui_scale.original_ui_rtv.get(), current_rtv.get()))
       {
-         com_ptr<ID3D11Resource> rtv_resource;
-         current_rtv->GetResource(&rtv_resource);
-         com_ptr<ID3D11Texture2D> rtv_texture;
-         rtv_resource->QueryInterface(&rtv_texture);
-         if (rtv_texture.get() == ui_scale.original_scene_texture)
-         {
-            ID3D11RenderTargetView* const scaled_rtv = ui_scale.scaled_texture_rtv.get();
-            ctx->OMSetRenderTargets(1, &scaled_rtv, nullptr);
-         }
+         ID3D11RenderTargetView* const scaled_rtv = ui_scale.scaled_texture_rtv.get();
+         ctx->OMSetRenderTargets(1, &scaled_rtv, nullptr);
       }
    }
 
@@ -286,11 +206,7 @@ static void RedirectUIDrawToScaledTarget(
       {
          if (!srvs[i])
             continue;
-         com_ptr<ID3D11Resource> srv_resource;
-         srvs[i]->GetResource(&srv_resource);
-         com_ptr<ID3D11Texture2D> srv_texture;
-         srv_resource->QueryInterface(&srv_texture);
-         if (srv_texture.get() == ui_scale.original_scene_texture)
+         if (AreViewsOfSameResource(srvs[i].get(), ui_scale.original_ui_rtv.get()))
          {
             ID3D11ShaderResourceView* const scaled_srv = ui_scale.scaled_texture_srv.get();
             ctx->PSSetShaderResources(i, 1, &scaled_srv);
@@ -299,40 +215,92 @@ static void RedirectUIDrawToScaledTarget(
    }
 }
 
-// Swaps the output shader's input SRV and constant buffer so it reads from
-// the upscaled texture with identity UV mapping.
-static void HandleOutputShaderForUIScale(
+static void CaptureOutputReplayState(ID3D11DeviceContext* ctx, GBFROutputReplayState& state)
+{
+   ID3D11DeviceContext1* ctx1 = nullptr;
+   if (FAILED(ctx->QueryInterface(&ctx1)))
+      return;
+   state.Reset();
+   ctx->VSGetShader(state.vs.put(), nullptr, nullptr);
+   ctx->PSGetShader(state.ps.put(), nullptr, nullptr);
+   ctx->OMGetRenderTargets(1, state.rtv.put(), nullptr);
+   UINT num_viewports = 1;
+   ctx->RSGetViewports(&num_viewports, &state.viewport);
+   ctx->PSGetShaderResources(0, 1, state.original_t0_srv.put());
+   ctx1->PSGetConstantBuffers1(1, 1, state.original_b1_cb.buffer.put(), &state.original_b1_cb.first_constant, &state.original_b1_cb.num_constants);
+   ctx->RSGetState(state.rs_state.put());
+   ctx->OMGetBlendState(state.blend_state.put(), state.blend_factor, &state.sample_mask);
+   ctx->IAGetInputLayout(state.input_layout.put());
+   {
+      ID3D11Buffer* vbs[2] = {};
+      ctx->IAGetVertexBuffers(0, 2, vbs, state.vb_strides, state.vb_offsets);
+      state.vertex_buffers[0].attach(vbs[0]);
+      state.vertex_buffers[1].attach(vbs[1]);
+   }
+   ctx->PSGetSamplers(0, 1, state.ps_sampler.put());
+   state.valid = state.vs && state.ps && state.rtv;
+}
+
+// Replays the Output shader draw in the immediate context.
+// If the UI phase ran this frame, reads from scaled_texture (SR output + composited UI).
+// If not (cutscene, photo mode), replays with the game's original captured source.
+// DC_UI is guaranteed complete by the time this is called, so ui_phase_seen_this_frame
+// is safe to read here without a race.
+static void ReplayOutputDraw(
    ID3D11DeviceContext* ctx,
-   ID3D11Device* native_device,
-   DeviceData& device_data,
    GameDeviceDataGBFR& game_device_data)
 {
    auto& ui_scale = game_device_data.ui_scale;
-   if (!ui_scale.scaled_texture_srv)
+   if (!ui_scale.output_replay_state.valid)
+      return;
+   ID3D11DeviceContext1* ctx1 = nullptr;
+   if (FAILED(ctx->QueryInterface(&ctx1)))
       return;
 
-   // Swap SRV 0 to the upscaled scene+UI texture.
-   ID3D11ShaderResourceView* const scaled_srv = ui_scale.scaled_texture_srv.get();
-   ctx->PSSetShaderResources(0, 1, &scaled_srv);
+   auto& state = ui_scale.output_replay_state;
+   ctx->VSSetShader(state.vs.get(), nullptr, 0);
+   ctx->PSSetShader(state.ps.get(), nullptr, 0);
+   ctx->GSSetShader(nullptr, nullptr, 0);
+   ctx->HSSetShader(nullptr, nullptr, 0);
+   ctx->DSSetShader(nullptr, nullptr, 0);
 
-   // Create a constant buffer with g_Param = {0, 0, 1, 1} if not yet created.
-   // zw = (1,1) makes the output shader's UV transform an identity since the
-   // texture is already at output resolution.
-   if (!ui_scale.output_param_cbuffer)
+   ctx->RSSetState(state.rs_state.get());
+   ctx->OMSetBlendState(state.blend_state.get(), state.blend_factor, state.sample_mask);
+
+   ctx->OMSetRenderTargets(0, nullptr, nullptr);
+   ID3D11RenderTargetView* const rtv = state.rtv.get();
+   ctx->OMSetRenderTargets(1, &rtv, nullptr);
+   ctx->RSSetViewports(1, &state.viewport);
+
+   ctx->IASetInputLayout(state.input_layout.get());
    {
-      const float param_data[4] = {0.0f, 0.0f, 1.0f, 1.0f};
-      D3D11_BUFFER_DESC buf_desc = {};
-      buf_desc.ByteWidth = sizeof(param_data);
-      buf_desc.Usage = D3D11_USAGE_IMMUTABLE;
-      buf_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-      D3D11_SUBRESOURCE_DATA init = {};
-      init.pSysMem = param_data;
-      native_device->CreateBuffer(&buf_desc, &init, ui_scale.output_param_cbuffer.put());
+      ID3D11Buffer* vbs[2] = {state.vertex_buffers[0].get(), state.vertex_buffers[1].get()};
+      ctx->IASetVertexBuffers(0, 2, vbs, state.vb_strides, state.vb_offsets);
+   }
+   ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+
+   ID3D11Buffer* const cb = state.original_b1_cb.buffer.get();
+   ctx1->PSSetConstantBuffers1(1, 1, &cb, &state.original_b1_cb.first_constant, &state.original_b1_cb.num_constants);
+
+   if (ui_scale.ui_phase_seen_this_frame && ui_scale.ui_scaled_needed)
+   {
+      // UI drew onto scaled_texture — present the composited result.
+      ID3D11ShaderResourceView* const scaled_srv = ui_scale.scaled_texture_srv.get();
+      ctx->PSSetShaderResources(0, 1, &scaled_srv);
+   }
+   else
+   {
+      // Game's original source — preserve the captured ring-buffer offset and scale.
+      ID3D11Buffer* const cb = state.original_b1_cb.buffer.get();
+      ctx1->PSSetConstantBuffers1(1, 1, &cb, &state.original_b1_cb.first_constant, &state.original_b1_cb.num_constants);
+      ID3D11ShaderResourceView* const srv = ui_scale.output_replay_state.original_t0_srv.get();
+      ctx->PSSetShaderResources(0, 1, &srv);
    }
 
-   if (ui_scale.output_param_cbuffer)
    {
-      ID3D11Buffer* const cb = ui_scale.output_param_cbuffer.get();
-      ctx->PSSetConstantBuffers(1, 1, &cb);
+      ID3D11SamplerState* const st = state.ps_sampler.get();
+      ctx->PSSetSamplers(0, 1, &st);
    }
+
+   ctx->Draw(4, 0);
 }

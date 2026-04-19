@@ -3,7 +3,7 @@
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
-#define ENABLE_POST_DRAW_CALLBACK 1
+#define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"

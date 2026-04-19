@@ -1,4 +1,3 @@
-#include "Includes/Common.hlsl"
 cbuffer ParamBuffer : register(b1)
 {
    float4 g_Param : packoffset(c0);

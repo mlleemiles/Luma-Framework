@@ -1,6 +1,7 @@
 #pragma once
 
 #include "globals.h"
+#include "overlay_log.h"
 
 #include <Windows.h>
 #include <string>
@@ -19,11 +20,20 @@
 #define PUBLISHING_CONSTEXPR constexpr
 #endif
 
+#if AVOID_INPUT_LOSS || PREFER_OVERLAY_MESSAGE_ASSERTS
+constexpr bool g_use_overlay_messages = true;
+#else
+constexpr bool g_use_overlay_messages = false;
+#endif
+
 // In non debug builds, replace asserts with a message box
 #if defined(NDEBUG) && (DEVELOPMENT || TEST)
 #define ASSERT(expression) ((void)(                                                       \
             (!!(expression)) ||                                                           \
-            (MessageBoxA(NULL, "Assertion failed: " #expression "\nFile: " __FILE__ "\nLine: " _STRINGIZE(__LINE__), Globals::MOD_NAME, MB_SETFOREGROUND | MB_OK))) \
+            (g_use_overlay_messages ?                                                     \
+               /* OverlayLog added messages always return "true" as handles are > 0 */    \
+               Luma::OverlayLog::AddError(std::string("Assertion failed: " #expression "\nFile: " __FILE__ "\nLine: " _STRINGIZE(__LINE__))) : \
+               MessageBoxA(NULL, "Assertion failed: " #expression "\nFile: " __FILE__ "\nLine: " _STRINGIZE(__LINE__), Globals::MOD_NAME, MB_SETFOREGROUND | MB_OK))) \
         )
 #undef assert
 #define assert(expression) ASSERT(expression)
@@ -34,24 +44,29 @@
 #if DEVELOPMENT || TEST || _DEBUG
 // "do while" is to avoid some edge cases with indentation
 #define ASSERT_MSG(expression, msg)                                     \
-    do {                                                                \
-        if (!(expression)) {                                            \
-            std::string full_msg = std::string("Assertion failed:\n\n") \
-                + #expression + "\n\n"                                  \
-                + msg + "\n\n"                                          \
-                + "File: " + __FILE__ + "\n"                            \
-                + "Line: " + std::to_string(__LINE__) + "\n\n"          \
-                + "Press Yes to break into debugger.\n"                 \
-                + "Press No to continue.";                              \
+	do {                                                                 \
+		if (!(expression)) {                                              \
+			std::string full_msg = std::string("Assertion failed:\n\n")    \
+				+ #expression + "\n\n"                                      \
+				+ msg + "\n\n"                                              \
+				+ "File: " + __FILE__ + "\n"                                \
+				+ "Line: " + std::to_string(__LINE__);                      \
                                                                         \
-            int result = MessageBoxA(nullptr,                           \
-                full_msg.c_str(),                                       \
-                "Assertion Failed",                                     \
-                MB_ICONERROR | MB_YESNO);                               \
+			if (g_use_overlay_messages) {                                  \
+				Luma::OverlayLog::AddError(full_msg);                       \
+			} else {                                                       \
+				full_msg += "\n\nPress Yes to break into debugger.\n";      \
+				full_msg += "Press No to continue.";                        \
                                                                         \
-            if (result == IDYES) { __debugbreak(); }                    \
-        }                                                               \
-    } while (false)
+				int result = MessageBoxA(nullptr,                           \
+					full_msg.c_str(),                                        \
+					"Assertion Failed",                                      \
+					MB_ICONERROR | MB_YESNO);                                \
+                                                                        \
+				if (result == IDYES) { __debugbreak(); }                    \
+			}                                                              \
+		}                                                                 \
+	} while (false)
 #define ASSERT_MSGF(expression, fmt, ...)                                     \
    do                                                                         \
    {                                                                          \

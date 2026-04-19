@@ -1,25 +1,6 @@
 #include "..\..\Core\core.hpp"
 #include "common.hpp"
 
-GBFRShaderHashes g_shader_hashes;
-GBFRRuntimeSettings g_runtime_settings;
-
-ShaderHashesList<false>& shader_hashes_OutlinePrefilter = g_shader_hashes.outline_prefilter;
-ShaderHashesList<false>& shader_hashes_OutlineCS = g_shader_hashes.outline_cs;
-ShaderHashesList<false>& shader_hashes_Temporal_Upscale = g_shader_hashes.temporal_upscale;
-ShaderHashesList<false>& shader_hashes_TAA = g_shader_hashes.taa;
-ShaderHashesList<false>& shader_hashes_Tonemap = g_shader_hashes.tonemap;
-ShaderHashesList<false>& shader_hashes_MotionBlur = g_shader_hashes.motion_blur;
-ShaderHashesList<false>& shader_hashes_MotionBlurDenoise = g_shader_hashes.motion_blur_denoise;
-ShaderHashesList<false>& shader_hashes_CutsceneGamma = g_shader_hashes.cutscene_gamma;
-ShaderHashesList<false>& shader_hashes_CutsceneColorGrade = g_shader_hashes.cutscene_color_grade;
-ShaderHashesList<false>& shader_hashes_CutsceneOverlayBlend = g_shader_hashes.cutscene_overlay_blend;
-ShaderHashesList<false>& shader_hashes_CutsceneOverlayModulate = g_shader_hashes.cutscene_overlay_modulate;
-ShaderHashesList<false>& shader_hashes_Output = g_shader_hashes.output;
-
-float& render_scale = g_runtime_settings.render_scale;
-bool& render_scale_changed = g_runtime_settings.render_scale_changed;
-
 bool CreateOrRecreateTextureIfNeeded(GameDeviceDataGBFR& game_device_data, ID3D11Device* native_device, D3D11_TEXTURE2D_DESC desc, ComPtr<ID3D11Texture2D>& texture)
 {
    bool needs_creation = false;
@@ -96,6 +77,26 @@ bool CreateOrRecreateTextureIfNeeded(GameDeviceDataGBFR& game_device_data, ID3D1
    }
 
    return false;
+}
+
+bool IsTonemapAfterTAAEnabled(bool require_taa_running)
+{
+   const bool tonemap_enabled = *GetShaderDefineData(char_ptr_crc32("TONEMAP_AFTER_TAA")).compiled_data.GetValue() != '0';
+   return tonemap_enabled && (!require_taa_running || IsTAARunningThisFrame());
+}
+
+void RefreshFrameJitterForPostProcess(GameDeviceDataGBFR& game_device_data)
+{
+   game_device_data.prev_table_jitter = game_device_data.table_jitter;
+#ifdef PATCH_JITTER_TABLE_INIT
+   TryReadTableJitterFromCounter(game_device_data.table_jitter);
+#else
+   TryReadTableJitter(game_device_data.table_jitter);
+#endif
+#if TEST || DEVELOPMENT
+   game_device_data.prev_jitter = game_device_data.jitter;
+   TryReadCameraJitter(game_device_data.jitter);
+#endif
 }
 
 ID3D11ShaderResourceView* GetPostAAColorInputSRV(const DeviceData& device_data, const GameDeviceDataGBFR& game_device_data)
