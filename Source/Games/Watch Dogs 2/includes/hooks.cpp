@@ -5,6 +5,7 @@ uintptr_t* AAOptionBase = nullptr;
 uintptr_t CDeferredFxAntialiasRenderer = 0;
 uintptr_t* CDeferredFxRendererContext = nullptr;
 CSceneViewportPrivateData* m_viewportPrivateData = nullptr;
+uintptr_t JitterTableOffset = 0;
 
 AAOptions GetAAOption()
 {

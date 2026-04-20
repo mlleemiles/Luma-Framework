@@ -94,7 +94,7 @@ extern uintptr_t* AAOptionBase;
 extern uintptr_t CDeferredFxAntialiasRenderer;
 extern uintptr_t* CDeferredFxRendererContext;
 extern CSceneViewportPrivateData* m_viewportPrivateData;
-
+extern uintptr_t JitterTableOffset;
 AAOptions GetAAOption();
 //float GetGameDeltaTime();
 //void GetViewportSize();
