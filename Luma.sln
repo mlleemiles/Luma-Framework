@@ -93,6 +93,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Fallout 4", "Source\Games\F
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Metro Redux", "Source\Games\Metro Redux\Metro Redux.vcxproj", "{528D5C48-3755-4BFD-8486-45B4C8B156C2}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Kingdom Come Deliverance", "Source\Games\Kingdom Come Deliverance\Kingdom Come Deliverance.vcxproj", "{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Development-Debug|Win32 = Development-Debug|Win32
@@ -677,6 +679,22 @@ Global
 		{528D5C48-3755-4BFD-8486-45B4C8B156C2}.Test-Release|Win32.ActiveCfg = Test-Release|x64
 		{528D5C48-3755-4BFD-8486-45B4C8B156C2}.Test-Release|x64.ActiveCfg = Test-Release|x64
 		{528D5C48-3755-4BFD-8486-45B4C8B156C2}.Test-Release|x64.Build.0 = Test-Release|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Debug|Win32.ActiveCfg = Development-Debug|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Debug|Win32.Build.0 = Development-Debug|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Debug|x64.Build.0 = Development-Debug|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Release|Win32.ActiveCfg = Development-Release|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Release|Win32.Build.0 = Development-Release|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Release|x64.ActiveCfg = Development-Release|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Development-Release|x64.Build.0 = Development-Release|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Publishing-Release|Win32.ActiveCfg = Publishing-Release|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Publishing-Release|Win32.Build.0 = Publishing-Release|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Publishing-Release|x64.ActiveCfg = Publishing-Release|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Publishing-Release|x64.Build.0 = Publishing-Release|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Test-Release|Win32.ActiveCfg = Test-Release|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Test-Release|Win32.Build.0 = Test-Release|Win32
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Test-Release|x64.ActiveCfg = Test-Release|x64
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}.Test-Release|x64.Build.0 = Test-Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -724,6 +742,7 @@ Global
 		{82505EE6-0256-4E89-B64A-227E87B9BE67} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{13503E35-E42F-46B8-9342-9AAFCDE5333E} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{528D5C48-3755-4BFD-8486-45B4C8B156C2} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{3FAC4E39-0051-42AC-89D5-CA74C3D5961B} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8B799422-BA66-3174-B21F-B9FA07C4B2E3}

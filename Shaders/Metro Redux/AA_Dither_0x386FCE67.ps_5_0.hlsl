@@ -3,6 +3,7 @@
 #define FXAA_QUALITY__PRESET 39
 #endif
 
+#include "../Includes/ColorGradingLUT.hlsl"
 #include "../Includes/Common.hlsl"
 #include "../Includes/FXAA.hlsl"
 
@@ -14,6 +15,27 @@
 #ifndef ENABLE_DITHER
 #define ENABLE_DITHER 0
 #endif
+
+//--------------------------------------------------------------
+/*
+ * Copyright (C) 2026 Carlos Lopez
+ * SPDX-License-Identifier: MIT
+ */
+
+float Neutwo(float x, float peak) {
+    // also written as x * rhypot(x, peak)
+    float p = peak;
+
+    float numerator = p * x;
+    float denominator_squared = mad(x, x, p * p);
+    return numerator * rsqrt(denominator_squared);
+}
+
+float3 NeutwoPerChannel(float3 color, float peak) {
+    return float3(Neutwo(color.r, peak), Neutwo(color.g, peak), Neutwo(color.b, peak));
+}
+
+//--------------------------------------------------------------
 
 cbuffer cb_screen : register(b2)
 {
@@ -94,4 +116,18 @@ void main(
   o0.xyz += temporalDither;
   o0.xyz = pow(abs(o0.xyz), 2.2) * Sign_Fast(o0.xyz);
 #endif
+  float3 untonemapped_bt2020 = BT709_To_BT2020(o0.xyz);
+  untonemapped_bt2020 = gamma_sRGB_to_linear(untonemapped_bt2020);
+
+  float peak = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
+  float diffuse_white = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+
+  peak = peak / diffuse_white;
+
+  float3 tonemapped_bt2020 = NeutwoPerChannel(untonemapped_bt2020, peak);
+  float3 tonemapped_bt709 = BT2020_To_BT709(tonemapped_bt2020);
+
+  tonemapped_bt709 = linear_to_sRGB_gamma(tonemapped_bt709);
+  o0.xyz = tonemapped_bt709;
+
 }
