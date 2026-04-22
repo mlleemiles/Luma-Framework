@@ -81,6 +81,26 @@ struct CSceneViewportPrivateData
    unsigned int m_renderCounter;
 };
 
+struct CShaderParameterMatrix44
+{
+   uint8_t _unk_field_0[0x10];
+   DirectX::XMFLOAT4X4 matrix;
+};
+
+struct CViewportShaderParameterProvider
+{
+   uint8_t _unk_field_0[0x30];
+   CShaderParameterMatrix44 m_viewProjectionMatrix;
+   CShaderParameterMatrix44 m_projectionMatrix;
+   CShaderParameterMatrix44 m_viewMatrix;
+   CShaderParameterMatrix44 m_invViewMatrix;
+   CShaderParameterMatrix44 m_viewRotProjectionMatrix;
+   CShaderParameterMatrix44 m_viewRotProjectionMatrixPure;
+   CShaderParameterMatrix44 m_invProjectionMatrix;
+   CShaderParameterMatrix44 m_previousViewProjectionMatrix;
+   // dont care about the rest..
+};
+
 enum AAOptions {
    OPTION_NO_AA,
    OPTION_FXAA,
@@ -94,7 +114,9 @@ extern uintptr_t* AAOptionBase;
 extern uintptr_t CDeferredFxAntialiasRenderer;
 extern uintptr_t* CDeferredFxRendererContext;
 extern CSceneViewportPrivateData* m_viewportPrivateData;
+extern CViewportShaderParameterProvider* m_viewportParamProvider;
 extern uintptr_t JitterTableOffset;
+
 AAOptions GetAAOption();
 //float GetGameDeltaTime();
 //void GetViewportSize();

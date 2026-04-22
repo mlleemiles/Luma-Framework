@@ -5,6 +5,7 @@ uintptr_t* AAOptionBase = nullptr;
 uintptr_t CDeferredFxAntialiasRenderer = 0;
 uintptr_t* CDeferredFxRendererContext = nullptr;
 CSceneViewportPrivateData* m_viewportPrivateData = nullptr;
+CViewportShaderParameterProvider* m_viewportParamProvider = nullptr;
 uintptr_t JitterTableOffset = 0;
 
 AAOptions GetAAOption()
@@ -23,6 +24,8 @@ __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintpt
    {
       uintptr_t base = a2[13];
       m_viewportPrivateData = reinterpret_cast<CSceneViewportPrivateData*>(base);
+      base = a2[8];
+      m_viewportParamProvider = reinterpret_cast<CViewportShaderParameterProvider*>(base);
    }
 
    return g_deferred_fx_antialias_renderer_hook

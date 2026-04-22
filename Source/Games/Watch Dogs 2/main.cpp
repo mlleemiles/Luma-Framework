@@ -3,7 +3,7 @@
 #define ENABLE_NGX 1
 // Hooking a debugger is forbidden
 #define DISABLE_AUTO_DEBUGGER 1
-#define DEBUG_LOG 0
+#define DEBUG_LOG 1
 
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 
@@ -15,6 +15,14 @@
 
 namespace
 {
+   union word_t
+   {
+      float f;
+      int32_t i;
+      uint32_t u;
+      std::byte b[4];
+   };
+   
    inline bool IsWine()
    {
       static void* pwine_get_version;
@@ -164,6 +172,10 @@ namespace
    ShaderHashesList shader_hashes_TemporalResolve;
    ShaderHashesList shader_hashes_TemporalAA;
    ShaderHashesList shader_hashes_WaterGridVectorMap;
+   ShaderHashesList shader_hashes_Materials;
+   
+   std::shared_mutex materials_mutex;
+   bool has_set_luma_cb_material = false;
 }
 
 struct GameDeviceDataWatchDogs2 final : public GameDeviceData
@@ -316,90 +328,189 @@ public:
 
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::compute_shader)
-         return nullptr;
-
-      std::unique_ptr<std::byte[]> new_code = nullptr;
-
-      // This compute shader was unsafe, it was reading and writing to the same coordinates of the same resources, from different threads at the same time, hence it needs some barriers to be added
-      // Credits to Nukem, Blisto, doitsujin and pendingchaos for helping figure it out.
-      if (shader_hash != 0x28BA3808)
+      if (type == reshade::api::pipeline_subobject_type::vertex_shader)
       {
+         std::unique_ptr<std::byte[]> new_code = nullptr;
+         
+         using namespace System;
+         static const std::vector<System::BytePattern> pattern = {
+            0x36, 0x00, 0x00, 0x05, 0x82, 0x00, 0x10, 0x00, ANY, ANY, ANY, ANY, 0x01, 0x40, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F,  //mov r1.w, l(1.000000)
+            0x11, 0x00, 0x00, 0x08, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, 0x46, 0x0E, 0x10, 0x00, ANY, ANY, ANY, ANY, 0x46, 0x8E, 0x20, 0x00, ANY, ANY, ANY, ANY, 0x14, 0x00, 0x00, 0x00, //dp4 r0.x, r1.xyzw, cb0[20].xyzw
+            0x11, 0x00, 0x00, 0x08, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, 0x46, 0x0E, 0x10, 0x00, ANY, ANY, ANY, ANY, 0x46, 0x8E, 0x20, 0x00, ANY, ANY, ANY, ANY, 0x15, 0x00, 0x00, 0x00, //dp4 r0.y, r1.xyzw, cb0[21].xyzw
+            0x11, 0x00, 0x00, 0x08, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, 0x46, 0x0E, 0x10, 0x00, ANY, ANY, ANY, ANY, 0x46, 0x8E, 0x20, 0x00, ANY, ANY, ANY, ANY, 0x17, 0x00, 0x00, 0x00  //dp4 o4.z, r1.xyzw, cb0[23].xyzw
+         };
+         
+         static const std::vector<System::BytePattern> dcl_cb_pattern = {
+            0x59, 0x00, 0x00, 0x04, 0x46, 0x8E, 0x20, 0x00, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, //dcl_constantbuffer cb0[181], immediateIndexed
+         };
+         
+         word_t instruction_operand_register; // we don't know register so use wildcard byte pattern
+         
+         std::vector<uint8_t> appended_patch = {
+            0x00, 0x00, 0x00, 0x09, // length(9)
+            0x72, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, //add r0.xyz
+            0x46, 0x02, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, //r0.xyzx
+            0x46, 0x82, 0x20, 0x80, 0x41, 0x00, 0x00, 0x00, //-cb__index__.xyzx
+            0x0B, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, //11[11]
+         };
+         
+         std::vector<uint8_t> appended_patch_cb = {
+            0x59, 0x00, 0x00, 0x04, 0x46, 0x8E, 0x20, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00, //dcl_constantbuffer cb11[12], immediateIndexed
+         };
+         
+         std::vector<std::byte*> matches;
+         matches = ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, pattern , true);
+         
+         if (!matches.empty())
+         {
+            {
+               const std::unique_lock lock(materials_mutex);
+               shader_hashes_Materials.vertex_shaders.emplace(uint32_t(shader_hash));
+            }
+            
+            reshade::log::message(reshade::log::level::info, "Found motion vector shader.");
+            std::byte* match_address = matches[0];
+            instruction_operand_register.u = *reinterpret_cast<uint32_t*>(match_address+8);
+            for (int i = 0; i < 4; i++)
+            {
+               appended_patch[8 + i]  = static_cast<uint8_t>(instruction_operand_register.b[i]);
+               appended_patch[16 + i] = static_cast<uint8_t>(instruction_operand_register.b[i]);
+            }
+            
+            new_code = std::make_unique<std::byte[]>(size + appended_patch.size() + appended_patch_cb.size());
+            
+         
+            std::vector<std::byte*> matches_cb;
+            matches_cb = ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, dcl_cb_pattern , true);
+            
+            if (!matches_cb.empty())
+            {
+               size_t insert_pos_cb = matches_cb[0] - code;
+               // Copy everything before pattern
+               std::memcpy(new_code.get(), code, insert_pos_cb);
+               // Insert the patch
+               std::memcpy(new_code.get() + insert_pos_cb, appended_patch_cb.data(), appended_patch_cb.size());
+               
+               size_t new_base = appended_patch_cb.size() + insert_pos_cb;
+               
+               size_t insert_pos = match_address - code;
+               // Copy everything from pattern cb to pattern
+               std::memcpy(new_code.get() + new_base, code + insert_pos_cb, insert_pos - insert_pos_cb);
+               // Insert the patch
+               std::memcpy(new_code.get() + appended_patch_cb.size() + insert_pos, appended_patch.data(), appended_patch.size());
+               // Copy the rest (including the return instruction)
+               std::memcpy(new_code.get() + appended_patch_cb.size() + insert_pos + appended_patch.size(), code + insert_pos, size - insert_pos);
+               
+               static const uint8_t cb_07_bytes[8] = {
+                  0x0B, 0x00, 0x00, 0x00,   // cb11
+                  0x07, 0x00, 0x00, 0x00    // [7]
+               };
+               static const uint8_t cb_08_bytes[8] = {
+                  0x0B, 0x00, 0x00, 0x00,   // cb11
+                  0x08, 0x00, 0x00, 0x00    // [8]
+               };
+               static const uint8_t cb_10_bytes[8] = {
+                  0x0B, 0x00, 0x00, 0x00,   // cb11
+                  0x0A, 0x00, 0x00, 0x00    // [10]
+               };
+               
+               std::memcpy(new_code.get() + appended_patch_cb.size() + insert_pos + appended_patch.size() + 44, cb_07_bytes, 8);
+               std::memcpy(new_code.get() + appended_patch_cb.size() + insert_pos + appended_patch.size() + 76, cb_08_bytes, 8);
+               std::memcpy(new_code.get() + appended_patch_cb.size() + insert_pos + appended_patch.size() + 108, cb_10_bytes, 8);
+               
+               size += appended_patch.size() + appended_patch_cb.size();
+            }
+         }
+         
          return new_code;
       }
+      else
+      {
+         if (type != reshade::api::pipeline_subobject_type::compute_shader)
+            return nullptr;
 
-      std::vector<uint8_t> appended_patch;
-      std::vector<const std::byte*> appended_patches_addresses;
+         std::unique_ptr<std::byte[]> new_code = nullptr;
 
-      // Matches "AllMemoryBarrierWithGroupSync()" ("sync_uglobal_g_t" in asm)
-      constexpr uint32_t flags =
-         D3D11_SB_SYNC_THREADS_IN_GROUP |
-         D3D11_SB_SYNC_THREAD_GROUP_SHARED_MEMORY |
-         D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GROUP |
-         D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GLOBAL;
-      uint32_t opcode_token =
-         ENCODE_D3D10_SB_OPCODE_TYPE(D3D11_SB_OPCODE_SYNC) |
-         ENCODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(1) |
-         ENCODE_D3D11_SB_SYNC_FLAGS(flags);
+         // This compute shader was unsafe, it was reading and writing to the same coordinates of the same resources, from different threads at the same time, hence it needs some barriers to be added
+         // Credits to Nukem, Blisto, doitsujin and pendingchaos for helping figure it out.
+         if (shader_hash != 0x28BA3808)
+         {
+            return new_code;
+         }
+
+         std::vector<uint8_t> appended_patch;
+         std::vector<const std::byte*> appended_patches_addresses;
+
+         // Matches "AllMemoryBarrierWithGroupSync()" ("sync_uglobal_g_t" in asm)
+         constexpr uint32_t flags =
+            D3D11_SB_SYNC_THREADS_IN_GROUP |
+            D3D11_SB_SYNC_THREAD_GROUP_SHARED_MEMORY |
+            D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GROUP |
+            D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GLOBAL;
+         uint32_t opcode_token =
+            ENCODE_D3D10_SB_OPCODE_TYPE(D3D11_SB_OPCODE_SYNC) |
+            ENCODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(1) |
+            ENCODE_D3D11_SB_SYNC_FLAGS(flags);
 #if 1 // TODOFT: test... we got "sync_sat_uglobal_g_t" otherwise?
-      // make 100% sure SAT is off (paranoia, but harmless)
-      opcode_token &= ~D3D10_SB_INSTRUCTION_SATURATE_MASK;
+         // make 100% sure SAT is off (paranoia, but harmless)
+         opcode_token &= ~D3D10_SB_INSTRUCTION_SATURATE_MASK;
 #endif
-      std::vector<uint32_t> opcode_token_patch = std::vector<uint32_t>{opcode_token};
+         std::vector<uint32_t> opcode_token_patch = std::vector<uint32_t>{opcode_token};
 
-      appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(opcode_token_patch.data()), reinterpret_cast<uint8_t*>(opcode_token_patch.data()) + opcode_token_patch.size() * sizeof(uint32_t));
+         appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(opcode_token_patch.data()), reinterpret_cast<uint8_t*>(opcode_token_patch.data()) + opcode_token_patch.size() * sizeof(uint32_t));
 
-      size_t size_u32 = size / sizeof(uint32_t);
-      const uint32_t* code_u32 = reinterpret_cast<const uint32_t*>(code);
-      size_t i = 0;
-      while (i < size_u32)
-      {
-         uint32_t opcode_token = code_u32[i];
-         D3D10_SB_OPCODE_TYPE opcode_type = DECODE_D3D10_SB_OPCODE_TYPE(opcode_token);
-         size_t instruction_size = opcode_type == D3D10_SB_OPCODE_CUSTOMDATA ? code_u32[i + 1] : DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(opcode_token); // Includes itself
-
-         if (opcode_type == D3D10_SB_OPCODE_IF)
+         size_t size_u32 = size / sizeof(uint32_t);
+         const uint32_t* code_u32 = reinterpret_cast<const uint32_t*>(code);
+         size_t i = 0;
+         while (i < size_u32)
          {
-            // Add the patch before every single branch value.
-            // Shift it by how much the data would have been shifted by prior patches we already added.
-            size_t i_add = appended_patches_addresses.size() * appended_patch.size() / sizeof(uint32_t); // Patches should always be a multiple of DWORD
-            appended_patches_addresses.emplace_back(reinterpret_cast<const std::byte*>(&code_u32[i + i_add]));
+            uint32_t opcode_token = code_u32[i];
+            D3D10_SB_OPCODE_TYPE opcode_type = DECODE_D3D10_SB_OPCODE_TYPE(opcode_token);
+            size_t instruction_size = opcode_type == D3D10_SB_OPCODE_CUSTOMDATA ? code_u32[i + 1] : DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(opcode_token); // Includes itself
+
+            if (opcode_type == D3D10_SB_OPCODE_IF)
+            {
+               // Add the patch before every single branch value.
+               // Shift it by how much the data would have been shifted by prior patches we already added.
+               size_t i_add = appended_patches_addresses.size() * appended_patch.size() / sizeof(uint32_t); // Patches should always be a multiple of DWORD
+               appended_patches_addresses.emplace_back(reinterpret_cast<const std::byte*>(&code_u32[i + i_add]));
+            }
+
+            i += instruction_size;
+            if (instruction_size == 0)
+               break;
          }
 
-         i += instruction_size;
-         if (instruction_size == 0)
-            break;
-      }
-
-      // Insert the patch for each address
-      if (!appended_patches_addresses.empty())
-      {
-         new_code = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
-
-         std::memcpy(new_code.get(), code, size);
-
-         size_t valid_size = size;
-
-         std::unique_ptr<std::byte[]> scratch_buffer = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
-
-         for (const auto appended_patches_address : appended_patches_addresses)
+         // Insert the patch for each address
+         if (!appended_patches_addresses.empty())
          {
-            size_t insert_pos = appended_patches_address - code; // These are already shifted to account for the previously inserted patches
+            new_code = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
 
-            // Copy from the address we'll insert the patch at, until the end, into a temporary buffer
-            std::memcpy(scratch_buffer.get(), new_code.get() + insert_pos, valid_size - insert_pos);
-            // Insert the patch
-            std::memcpy(new_code.get() + insert_pos, appended_patch.data(), appended_patch.size());
-            // Fill back the previous data, shifted
-            std::memcpy(new_code.get() + insert_pos + appended_patch.size(), scratch_buffer.get(), valid_size - insert_pos);
+            std::memcpy(new_code.get(), code, size);
 
-            valid_size += appended_patch.size();
+            size_t valid_size = size;
+
+            std::unique_ptr<std::byte[]> scratch_buffer = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
+
+            for (const auto appended_patches_address : appended_patches_addresses)
+            {
+               size_t insert_pos = appended_patches_address - code; // These are already shifted to account for the previously inserted patches
+
+               // Copy from the address we'll insert the patch at, until the end, into a temporary buffer
+               std::memcpy(scratch_buffer.get(), new_code.get() + insert_pos, valid_size - insert_pos);
+               // Insert the patch
+               std::memcpy(new_code.get() + insert_pos, appended_patch.data(), appended_patch.size());
+               // Fill back the previous data, shifted
+               std::memcpy(new_code.get() + insert_pos + appended_patch.size(), scratch_buffer.get(), valid_size - insert_pos);
+
+               valid_size += appended_patch.size();
+            }
+
+            size = valid_size;
          }
-
-         size = valid_size;
+         
+         return new_code;
       }
-
-      return new_code;
    }
 
    static bool CreateSRResources(ID3D11Device* native_device, ID3D11Texture2D* sr_output_color, GameDeviceDataWatchDogs2& game_device_data, D3D11_TEXTURE2D_DESC desc)
@@ -542,6 +653,13 @@ public:
             has_sent_tf_warning = true;
          }
       }
+      const std::shared_lock lock(materials_mutex);
+      if (!has_set_luma_cb_material && original_shader_hashes.Contains(shader_hashes_Materials))
+      {
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
+         //has_set_luma_cb_material = false;
+         return DrawOrDispatchOverrideType::None;
+      }
 
       auto& game_device_data = GetGameDeviceData(device_data);
       
@@ -682,6 +800,16 @@ public:
             {
                game_device_data.CameraSpaceToPreviousProjectedSpace = ComputeCameraSpaceToPreviousProjectedSpaceMatrix();
                game_device_data.PreviousViewRotProjectionMatrix = ComputePreviousViewRotProjectionMatrix();
+               
+               DirectX::XMMATRIX PreviousViewRotProjectionMatrix_Game = DirectX::XMLoadFloat4x4(
+         reinterpret_cast<const DirectX::XMFLOAT4X4*>(&m_viewportParamProvider->m_previousViewProjectionMatrix.matrix));
+               
+               DirectX::XMMATRIX ViewRotProjectionMatrix_Game = DirectX::XMLoadFloat4x4(
+         reinterpret_cast<const DirectX::XMFLOAT4X4*>(&m_viewportParamProvider->m_viewRotProjectionMatrix.matrix));
+               
+               LogXMMatrix("PreviousViewRotProjectionMatrix", game_device_data.PreviousViewRotProjectionMatrix);
+               LogXMMatrix("ViewRotProjectionMatrix_Game", ViewRotProjectionMatrix_Game);
+               LogXMMatrix("PreviousViewRotProjectionMatrix_Game", PreviousViewRotProjectionMatrix_Game);
                
                CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
                SetLumaConstantBuffers(immediate_ctx.get(), cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
@@ -829,7 +957,7 @@ public:
       {
          game_device_data.render_resolution.x = (float)m_viewportPrivateData->m_viewportSize[0];
          game_device_data.render_resolution.y = (float)m_viewportPrivateData->m_viewportSize[1];
-         if (device_data.sr_type != SR::Type::None)
+         //if (device_data.sr_type != SR::Type::None)
          {
             JitterUpdate();
          }
@@ -864,6 +992,7 @@ public:
       }
 
       device_data.has_drawn_sr = false;
+      has_set_luma_cb_material = false;
       
       device_data.cb_luma_global_settings_dirty = true;
       int32_t sr_type = static_cast<int32_t>(device_data.sr_type);
@@ -873,11 +1002,18 @@ public:
    void UpdateLumaInstanceDataCB(CB::LumaInstanceDataPadded& data, CommandListData& cmd_list_data, DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-
+      
       memcpy(&data.GameData.CameraSpaceToPreviousProjectedSpace, &game_device_data.CameraSpaceToPreviousProjectedSpace, sizeof(game_device_data.CameraSpaceToPreviousProjectedSpace));
-      memcpy(&data.GameData.PreviousViewRotProjectionMatrix, &game_device_data.PreviousViewRotProjectionMatrix, sizeof(game_device_data.PreviousViewRotProjectionMatrix));
-      if (CDeferredFxAntialiasRenderer)
+      
+      if (m_viewportPrivateData != nullptr)
       {
+         DirectX::XMMATRIX prev_view_rot_proj = ComputePreviousViewRotProjectionMatrix();
+         memcpy(&data.GameData.PreviousViewRotProjectionMatrix, &prev_view_rot_proj, sizeof(game_device_data.PreviousViewRotProjectionMatrix));
+      }
+      
+      if (m_viewportPrivateData != nullptr)
+      {
+         //float4 zero = {0.0, 0.0, 0.0};
          memcpy(&data.GameData.PreviousCameraPosition, &m_viewportPrivateData->m_motionBlur.m_lastPreviousCamera.m_camera.m_position, sizeof(data.GameData.PreviousCameraPosition));
          
          float2 jitter = {0.0, 0.0};
