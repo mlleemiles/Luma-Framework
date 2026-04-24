@@ -939,6 +939,7 @@ public:
 
                if (device_data.has_drawn_sr)
                {
+                  //TODO: write luminance to alpha as required for exposure + post effects
                   immediate_ctx->CopyResource(game_device_data.source_color.get(), device_data.sr_output_color.get());
                }
 
