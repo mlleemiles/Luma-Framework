@@ -142,7 +142,7 @@ float3 SetChrominance(float3 color, float chrominance)
 float GetSaturation(float3 color, uint colorSpace = CS_DEFAULT)
 {
 	float luminance = GetLuminance(color, colorSpace);
-	return (luminance == 0.0) ? 1.0 : max3(color) / luminance; // Find the ratio of the color against the luminance
+	return (luminance == 0.0) ? 1.0 : max3(abs(color)) / luminance; // Find the ratio of the color against the luminance
 }
 
 float3 Saturation(float3 color, float saturation, uint colorSpace = CS_DEFAULT)
@@ -201,6 +201,26 @@ float3 CorrectPerChannelTonemapHiglightsDesaturation(float3 color, float peakBri
     // We can't simply change the min, max or mid colors independently to change chrominance, or we'd heavily shift the luminance, so we use the saturation formula.
     return Saturation(color, chrominanceRatio, colorSpace);
 #endif
+}
+
+// This fixes colors with an invalid luminance, increasing the negative channels until luminance is >= 0.
+// We don't simply offset all rgb channels because that'd generally be less like the result games expect.
+// When games subtract offsets from rgb colors, they often clip negative values at some point,
+// this tries to let subtractions expand gamut as much as they can, without going into negative luminances.
+float3 CorrectNegativeLuminance(float3 Color, float3 LuminanceVec)
+{
+	float colorLuminance = dot(Color, LuminanceVec);
+	if (colorLuminance < 0)
+	{
+		float3 positiveColor = max(Color, 0.0);
+		float3 negativeColor = min(Color, 0.0);
+		float positiveLuminance = dot(positiveColor, LuminanceVec);
+		float negativeLuminance = dot(negativeColor, LuminanceVec);
+		float negativePositiveLuminanceRatio = positiveLuminance / -negativeLuminance;
+		negativeColor *= negativePositiveLuminanceRatio;
+		Color = positiveColor + negativeColor;
+	}
+	return Color;
 }
 
 // This basically does gamut mapping, however it's not focused on gamut as primaries, but on peak white (MaxRange).
@@ -886,8 +906,8 @@ float3 EmulateShadowClip(float3 Color, bool LinearInOut = true, float Adjustment
 }
 
 // Linear or Gamma in/out
-// Modernizes old school grading that either clips or raises blacks, not really suitable for modern OLEDs.
-// Perceptually raises shadow without raising the black floor.
+// Modernizes old school grading that either clips or raises blacks, which isn't really suitable for modern OLEDs.
+// This perceptually raises shadow without raising the black floor.
 float3 EmulateShadowOffset(float3 Color, float3 Offset, bool LinearInOut = true, bool SmoothOutLargeOffsets = true)
 {
 	// Whether the offset was removing color (causing clipping in SDR, and expanding the color range in HDR), or adding to color (raising blacks),

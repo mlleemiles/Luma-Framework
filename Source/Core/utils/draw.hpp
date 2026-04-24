@@ -40,7 +40,7 @@ struct DrawStateStack
       state->uav_num = device_max_uav_num;
       if constexpr (Mode == DrawStateStackType::SimpleGraphics || Mode == DrawStateStackType::FullGraphics)
       {
-         device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &state->render_target_views[0], &state->depth_stencil_view);
+         device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &state->render_target_views[0], &state->depth_stencil_view); // TODO: optimize away for the "OMGetRenderTargetsAndUnorderedAccessViews" call case? We could just get all the RTVs and UAVs from slot 0 and then find the first valid UAV
          if constexpr (Mode == DrawStateStackType::FullGraphics)
          {
             for (size_t i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
@@ -49,7 +49,7 @@ struct DrawStateStack
                if (!rtv_empty)
                {
                   state->render_target_views[i].reset(); // Re-set it as we will re-assign it
-                  state->valid_render_target_views_bound++; // The documentation is confusing, but it seems like the UAV start slot you request needs to be >= the number of valid bound RTVs. Alternatively we could check for the first valid UAV?
+                  state->valid_render_target_views_bound = i + 1; // The documentation is confusing, but it seems like the UAV start slot you request needs to be >= the number of valid+null bound RTVs (up to the last valid one). Alternatively we could check for the first valid UAV?
                }
             }
             state->depth_stencil_view.reset();
@@ -136,7 +136,7 @@ struct DrawStateStack
             if constexpr (Mode == DrawStateStackType::FullGraphics)
             {
                ID3D11UnorderedAccessView* const* uavs_const = (ID3D11UnorderedAccessView**)std::addressof(state->unordered_access_views[0]);
-               UINT uav_initial_counts[D3D11_1_UAV_SLOT_COUNT]; // Likely not necessary, we could pass in nullptr
+               UINT uav_initial_counts[D3D11_1_UAV_SLOT_COUNT]; // TODO: Likely not necessary, we could pass in nullptr
                std::ranges::fill(uav_initial_counts, -1u);
                device_context->OMSetRenderTargetsAndUnorderedAccessViews(state->valid_render_target_views_bound, rtvs_const, state->depth_stencil_view.get(), state->valid_render_target_views_bound, state->uav_num - state->valid_render_target_views_bound, uavs_const, &uav_initial_counts[0]);
             }
@@ -318,7 +318,7 @@ struct DrawStateStack
       UINT viewports_num = 1;
       com_ptr<ID3D11InputLayout> input_layout;
       com_ptr<ID3D11RasterizerState> rasterizer_state;
-      UINT valid_render_target_views_bound = 0;
+      UINT valid_render_target_views_bound = 0; // Includes null ones as well if bound between valid RTVs
       UINT uav_num = D3D11_1_UAV_SLOT_COUNT;
    };
 
@@ -749,7 +749,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
       else if (pipeline->HasComputeShader())
       {
          com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
-         native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
+         native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]); // TODO: use the CSGetShaderResources1 version (all around) which also has the plane desc
          for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
          {
             if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound_resources || cached_shader->srvs[i]))

@@ -39,6 +39,11 @@ float3 remap(float3 input, float3 oldMin, float3 oldMax, float3 newMin, float3 n
 {
 	return ((input - oldMin) * ((newMax - newMin) / (oldMax - oldMin))) + newMin;
 }
+float3 remapClamped(float3 input, float3 oldMin, float3 oldMax, float3 newMin, float3 newMax)
+{
+  float3 t = clamp(input, oldMin, oldMax);
+  return ((t - oldMin) * ((newMax - newMin) / (oldMax - oldMin))) + newMin;
+}
 
 // Returns 0, 1, -1/0/+1 or +/-FLT_MAX if "dividend" is 0
 float safeDivision(float quotient, float dividend, int fallbackMode = 0)

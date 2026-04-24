@@ -34,8 +34,8 @@ namespace Luma::OverlayLog
 	inline constexpr const char* g_dismiss_key_label = "END"; // Matches "g_dismiss_key"
 
 	// Settings:
-   inline bool show_messages = true;
-   inline std::atomic<bool> g_messages_paused = false;
+	inline bool show_messages = true;
+	inline std::atomic<bool> g_messages_paused = false;
 
 	enum class LogLevel : uint8_t
 	{
@@ -263,20 +263,20 @@ namespace Luma::OverlayLog
 
 			ImGui::PushID(static_cast<int>(message.id));
 
-			ImGui::TextColored(GetLevelColor(message.level), "[%s]", GetLevelString(message.level));
-			ImGui::SameLine();
-			ImGui::TextWrapped("%s", message.text.c_str()); // TODO: color this too?
+			ImGui::PushStyleColor(ImGuiCol_Text, GetLevelColor(message.level));
+			ImGui::Text("%s: %s", GetLevelString(message.level), message.text.c_str());
+			ImGui::PopStyleColor();
 
 			// Only allow dismissing the newest message, if desired
 			const bool is_last_message = (i + 1 == messages_snapshot.size());
 			if (message.dismissible && is_last_message)
 			{
 				ImGui::SameLine();
-				ImGui::TextWrapped("[%s]", g_dismiss_key_label);
+				ImGui::Text(" [%s]", g_dismiss_key_label);
 				if (key_pressed_event)
 				{
 					messages_to_remove.push_back(message.id);
-               key_pressed_event = false;
+					key_pressed_event = false;
 				}
 			}
 

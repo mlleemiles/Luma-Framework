@@ -610,7 +610,7 @@ float3 SampleLUT(LUT_TEXTURE_TYPE lut, SamplerState samplerState, float3 color, 
     const float3 v1 = lut.Load(ConditionalConvert3DTo2DLUTCoordinates(baseInd, chartDimUint)).rgb;
     const float3 v4 = lut.Load(ConditionalConvert3DTo2DLUTCoordinates(nextInd, chartDimUint)).rgb;
 
-    float3 f1, f2, f3, f4;
+    float f1, f2, f3, f4;
 
     [flatten]
     if (fract.r >= fract.g)

@@ -568,10 +568,12 @@ public:
       if (enable_hdr && original_shader_hashes.Contains(shader_hashes_tonemap_candidates) && test_index != 15 && custom_shaders_enabled)
       {
          com_ptr<ID3D11ShaderResourceView> shader_resources[8]; // Should always be enough
-         if (is_compute_shader)                                 // Can be both compute or pixel shader
+         if (is_compute_shader)                                 // Can be either compute or pixel shader
             native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
          else
             native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+
+         const auto shader_hash = is_compute_shader ? original_shader_hashes.compute_shaders[0] : original_shader_hashes.pixel_shaders[0];
 
          int32_t lut_srv_index = -1;
          for (size_t i = 0; i < ARRAYSIZE(shader_resources); i++)
@@ -589,14 +591,17 @@ public:
                com_ptr<ID3D11Texture2D> texture2d = (ID3D11Texture2D*)resource.get();
                D3D11_TEXTURE2D_DESC desc;
                texture2d->GetDesc(&desc);
-               if (desc.Width == 32 * 32 && desc.Height == 32)
+               if (desc.Width == (32 * 32) && desc.Height == 32)
                {
                   if (!game_device_data.tonemap_lut_texture || game_device_data.tonemap_lut_texture_is_3d)
                   {
                      game_device_data.tonemap_lut_texture = (com_ptr<ID3D11Resource>&&)CloneTexture<ID3D11Texture2D>(native_device, texture2d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
+                     game_device_data.tonemap_lut_texture_srv.reset();
+                     game_device_data.tonemap_lut_texture_uav.reset();
                      native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_srv);
                      native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_uav);
                      game_device_data.tonemap_lut_texture_is_3d = false;
+                     reshade::log::message(reshade::log::level::info, std::format("UE4: Found 2D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
                   }
                   lut_srv_index = i;
                   break;
@@ -612,9 +617,12 @@ public:
                   if (!game_device_data.tonemap_lut_texture || !game_device_data.tonemap_lut_texture_is_3d)
                   {
                      game_device_data.tonemap_lut_texture = (com_ptr<ID3D11Resource>&&)CloneTexture<ID3D11Texture3D>(native_device, texture3d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
+                     game_device_data.tonemap_lut_texture_srv.reset();
+                     game_device_data.tonemap_lut_texture_uav.reset();
                      native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_srv);
                      native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_uav);
                      game_device_data.tonemap_lut_texture_is_3d = true;
+                     reshade::log::message(reshade::log::level::info, std::format("UE4: Found 3D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
                   }
                   lut_srv_index = i;
                   break;
@@ -683,7 +691,7 @@ public:
             }
             else
             {
-               native_device_context->PSSetShaderResources(0, 1, &(ID3D11ShaderResourceView* const&)(shader_resources[0].get()));
+               //native_device_context->PSSetShaderResources(0, 1, &(ID3D11ShaderResourceView* const&)(shader_resources[0].get())); // TODO: delete? This seems unnecessary if we use CSs, given that we didn't change the PS state, nor there could be any conflict that cleared them
                native_device_context->PSSetShaderResources(lut_srv_index, 1, &(ID3D11ShaderResourceView* const&)(game_device_data.tonemap_lut_texture_srv.get()));
             }
 

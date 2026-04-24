@@ -127,9 +127,6 @@
 #ifndef CHECK_GRAPHICS_API_COMPATIBILITY
 #define CHECK_GRAPHICS_API_COMPATIBILITY 0
 #endif // CHECK_GRAPHICS_API_COMPATIBILITY
-#ifndef ENABLE_DRAW_DISPATCH_DATA_CACHE
-#define ENABLE_DRAW_DISPATCH_DATA_CACHE 0
-#endif // ENABLE_DRAW_DISPATCH_DATA_CACHE
 #ifndef ENABLE_AUTO_CBUFFER_RESTORATION
 #define ENABLE_AUTO_CBUFFER_RESTORATION 0
 #endif // ENABLE_AUTO_CBUFFER_RESTORATION
@@ -1324,7 +1321,7 @@ namespace
                      std::string_view str_view(&str[i0], i - i0);
                      if (str_view.rfind("#define ", 0) == 0)
                      {
-                        str_view = str_view.substr(strlen("#define "));
+                        str_view = str_view.substr(strlen("#define ")); // TODO: this doesn't account for " #define" that have spaces before them? Etc
                         size_t space_index = str_view.find(' ');
                         if (space_index != std::string::npos)
                         {
@@ -4446,7 +4443,7 @@ namespace
             if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource_ptr}, usage, resource_view_desc, &mirrored_upgraded_resource_view))
             {
                std::unique_lock lock_device_write(device_data.mutex);
-               if (!device_data.original_resource_views_to_mirrored_upgraded_resource_views.contains(mirrored_upgraded_resource_view.handle))
+               if (!device_data.original_resource_views_to_mirrored_upgraded_resource_views.contains(in_rv))
                {
                   device_data.original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = mirrored_upgraded_resource_view.handle;
                   out_rv = mirrored_upgraded_resource_view.handle;
@@ -5795,14 +5792,15 @@ namespace
                      UINT valid_render_target_views_bound = 0;
                      for (size_t i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
                      {
-                        if (rtvs[i].get() == nullptr)
+                        // Count until the last valid one (nullptr ones are allowed in the middle)
+                        if (rtvs[i].get() != nullptr)
                         {
-                           valid_render_target_views_bound++;
+                           valid_render_target_views_bound = i + 1;
                         }
                      }
 
                      ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(rtvs[0]);
-                     native_device_context->OMSetRenderTargetsAndUnorderedAccessViews(valid_render_target_views_bound, rtvs_const, dsv.get(), valid_render_target_views_bound, device_data.uav_max_count - valid_render_target_views_bound, uavs_const, nullptr);
+                     native_device_context->OMSetRenderTargetsAndUnorderedAccessViews(valid_render_target_views_bound, rtvs_const, dsv.get(), valid_render_target_views_bound, device_data.uav_max_count - valid_render_target_views_bound, uavs_const + valid_render_target_views_bound, nullptr);
                   }
                   else
                   {
@@ -6837,9 +6835,9 @@ namespace
          {
             desc.MipLODBias = std::clamp(desc.MipLODBias + device_data.texture_mip_lod_bias_offset, D3D11_MIP_LOD_BIAS_MIN, D3D11_MIP_LOD_BIAS_MAX); // Setting this out of range (~ +/- 16) will make DX11 crash
          }
-         else if (samplers_upgrade_mode == 3) // TODO: Remove once mip based effects in Persona 5 are fixed 
+         else if (samplers_upgrade_mode == 3) // Only change the offset when the original value is zero
          {
-             desc.MipLODBias = (desc.MipLODBias == 0.0f) ? desc.MipLODBias + device_data.texture_mip_lod_bias_offset : desc.MipLODBias;
+             desc.MipLODBias = (desc.MipLODBias == 0.0f) ? device_data.texture_mip_lod_bias_offset : desc.MipLODBias;
              desc.MipLODBias = std::clamp(desc.MipLODBias, D3D11_MIP_LOD_BIAS_MIN, D3D11_MIP_LOD_BIAS_MAX); // Setting this out of range (~ +/- 16) will make DX11 crash
          }
 
@@ -10893,7 +10891,7 @@ namespace
                                           ImGui::Text("R Size: %ux%ux%ux%u", sr_size.x, sr_size.y, sr_size.z, sr_size.w);
                                           ImGui::Text("RV Mip: %u", draw_call_data.srv_mip[i]);
                                           ImGui::Text("RV Size: %ux%ux%u", srv_size.x, srv_size.y, srv_size.z);
-                                          ImGui::Text("R is RT: %s", sr_is_rt ? "True" : "False");
+                                          ImGui::Text("R is RT: %s", sr_is_rt ? "True" : "False"); // TODO: add if they have CPU access, or immutable etc
                                           ImGui::Text("R is UA: %s", sr_is_ua ? "True" : "False");
                                           bool upgraded = false;
                                           {
@@ -12667,6 +12665,8 @@ namespace
                {
                case 0: // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
                   selected_dlss_preset = "Default"; break;
+               case 5: // NVSDK_NGX_DLSS_Hint_Render_Preset_E
+                  selected_dlss_preset = "E (CNN)"; break;
                case 6: // NVSDK_NGX_DLSS_Hint_Render_Preset_F
                   selected_dlss_preset = "F (CNN)"; break;
                case 10: // NVSDK_NGX_DLSS_Hint_Render_Preset_J
@@ -12701,7 +12701,8 @@ namespace
                   };
 
                   AddPresetItem("Default", 0, "Uses NVIDIA suggested preset."); // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
-                  AddPresetItem("F (CNN)", 6, "Deprecated CNN model. It is more performant, but blurier than the newer models. It might offer less ghosting.");  // NVSDK_NGX_DLSS_Hint_Render_Preset_F
+                  AddPresetItem("E (CNN)", 5, "Deprecated CNN model. It is more performant, but blurrier than the newer models. Sharper than F but slightly more aliased."); // NVSDK_NGX_DLSS_Hint_Render_Preset_E
+                  AddPresetItem("F (CNN)", 6, "Deprecated CNN model. It is more performant, but blurrier than the newer models. It might offer less ghosting than J/K."); // NVSDK_NGX_DLSS_Hint_Render_Preset_F
                   AddPresetItem("J", 10, "Very similar to K. Has issues with reflections and transparent effects / volumetrics."); // NVSDK_NGX_DLSS_Hint_Render_Preset_J
                   AddPresetItem("K", 11, "Very similar to J. Has issues with reflections and transparent effects / volumetrics."); // NVSDK_NGX_DLSS_Hint_Render_Preset_K
                   AddPresetItem("L", 12, "Highest quality, but very performance intensive. Suggested when upscaling from very low resolution (Ultra Performance)."); // NVSDK_NGX_DLSS_Hint_Render_Preset_L
@@ -12976,7 +12977,7 @@ namespace
             }
 
 #if DEVELOPMENT
-            // Print warnings if the OS gamma wasn't neutral (we don't want that in HDR!). This is extremely slow in some games (e.g. Lego City Undercover) (probably because they set a value, even if neutral) so it's behind a toggle.
+            // Print warnings if the OS gamma wasn't neutral (we don't want that in HDR!). This check is extremely slow in some games (e.g. Lego City Undercover) (probably because they set a value, even if neutral) so it's behind a toggle.
             static bool check_gamma_ramp = false;
             ImGui::Checkbox("Check Gamma Ramp", &check_gamma_ramp);
             if (check_gamma_ramp)
@@ -13877,9 +13878,9 @@ namespace
                                        rtvs[i] = nullptr;
                                        rts_changed = true;
                                     }
-                                    display_composition_rtv = nullptr; // Note: we don't respect "force_create_swapchain_rtvs" here.
                                  }
                               }
+                              swapchain_data.display_composition_rtvs.clear(); // Note: we don't respect "force_create_swapchain_rtvs" here.
                               if (rts_changed)
                               {
                                  ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(rtvs[0]);
