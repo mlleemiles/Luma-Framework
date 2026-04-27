@@ -13,6 +13,38 @@ static inline T* ResolveRipRelative(void* instr, std::ptrdiff_t dispOffset, std:
    return reinterpret_cast<T*>(dest);
 }
 
+
+struct CTexture
+{
+   uintptr_t* __vftable;
+   uint8_t _unk_field_0[0x8];
+   uintptr_t* m_levelViews;
+   ID3D11Resource* m_nativeTexture;
+   ID3D11ShaderResourceView* m_shaderResourceView;
+   ID3D11UnorderedAccessView* m_uav;
+   com_ptr<ID3D11DepthStencilView> m_depthStencilViews[2][2];
+   ID3D11RenderTargetView* m_renderTargetView;
+   uintptr_t* m_aliases;
+   unsigned int m_hideMipLevels;
+   unsigned int m_numTextures;
+   bool m_isCubeMap;
+   bool m_isMultisampled;
+   bool m_isVolume;
+   bool m_isReusable;
+   // dont care about the rest..
+};
+
+struct CIndirectTexture {
+   CTexture* m_texture; // 0x0  (size 0x8)
+   const char * m_debugName; // 0x8  (size 0x8)
+   unsigned int m_sizeX; // 0x10  (size 0x4)
+   unsigned int m_sizeY; // 0x14  (size 0x4)
+   unsigned int m_sizeZ; // 0x18  (size 0x4)
+   unsigned int m_mipLevelCount; // 0x28  (size 0x4)
+   unsigned int m_format; // 0x2C  (size 0x4)
+   uint8_t __pad[0x4];
+};
+
 struct CCameraMatrices {
    Math::Matrix44F m_viewMatrix; // 0x0  (size 0x40)
    Math::Matrix44F m_viewMatrixInverse; // 0x40  (size 0x40)
@@ -75,10 +107,17 @@ struct CSceneViewportPrivateData
    CControlCamera m_renderCamera;
    CControlCamera m_renderCameraFull;
    CSceneViewportPrivateDataMotionBlur m_motionBlur;
-   uint8_t unknown_field[0x88];
+   uint8_t unknown_field0[0x88];
    unsigned int m_renderOnceFrameCount;
    unsigned int m_renderOnceMaxNumFrames;
    unsigned int m_renderCounter;
+   uint8_t unknown_field1[0x2C];
+   CTexture* unknown_texture;
+   uint8_t unknown_field2[0x20];
+   CTexture* m_textures[6];
+   uint8_t unknown_field3[0x4];
+   unsigned int m_TextureCount;
+   CTexture* more_textures[10];
 };
 
 struct CShaderParameterMatrix44
@@ -101,6 +140,46 @@ struct CViewportShaderParameterProvider
    // dont care about the rest..
 };
 
+struct CDeferredFxRendererContextTextures
+{
+   CIndirectTexture* m_accumBuffer; // 0x0  (size 0x8)
+   CIndirectTexture* m_linearDepthTexture; // 0x8  (size 0x8)
+   CIndirectTexture* m_smallDepthColorTexture; // 0x10  (size 0x8)
+   CIndirectTexture* m_depthStencilSurface; // 0x18  (size 0x8)
+   CIndirectTexture* m_motionVectors; // 0x20  (size 0x8)
+   CIndirectTexture* m_normalsTexture; // 0x28  (size 0x8)
+   uintptr_t* m_gBufferAOTexture; // 0x30  (size 0x8)
+   uintptr_t* m_fullAOTexture; // 0x38  (size 0x8)
+};
+
+struct CDeferredFxAntialiasRendererS
+{
+   uint8_t field_0[0x18]; // 0x0  (size 0x18)
+   CTexture* m_currDeferredFXAntialiasFrameTexture; // 0x18  (size 0x8)
+   bool m_useAsyncCopy; // 0x20  (size 0x1)
+   uint8_t _pad_21[0x7]; // padding
+   uintptr_t* m_rendererHelpers; // 0x28  (size 0x8)
+   uintptr_t* m_volatileTextureManager; // 0x30  (size 0x8)
+   uintptr_t* m_clearTextureFrameJob; // 0x38  (size 0x8)
+   uintptr_t* m_generateFrameJob; // 0x40  (size 0x8)
+   uintptr_t* m_copyLuminanceFrameJob; // 0x48  (size 0x8)
+   unsigned __int64 m_shaderID; // 0x50  (size 0x8)
+   unsigned __int64 m_generateOption; // 0x58  (size 0x8)
+   unsigned __int64 m_zeroTimeDeltaOption; // 0x60  (size 0x8)
+   unsigned __int64 m_noPreviousFrameOption; // 0x68  (size 0x8)
+   unsigned __int64 m_resolveOption; // 0x70  (size 0x8)
+   unsigned __int64 m_luminanceCopyOption; // 0x78  (size 0x8)
+   unsigned __int64 m_debugInvalidColoursOption; // 0x80  (size 0x8)
+   unsigned __int64 m_gbufferMSOption; // 0x88  (size 0x8)
+   unsigned __int64 m_gbufferMSOptimizationPerPixelOption; // 0x90  (size 0x8)
+   unsigned __int64 m_gbufferMSOptimizationPerSampleOption; // 0x98  (size 0x8)
+   bool m_donePrepare; // 0xA0  (size 0x1)
+   bool m_executeClearTextureFrameJob; // 0xA1  (size 0x1)
+   bool m_willRenderThisFrame; // 0xA2  (size 0x1)
+   bool m_doExecuteLuminanceFrameJob; // 0xA3  (size 0x1)
+   unsigned int m_previousResetRequests; // 0xA4  (size 0x4)
+};
+
 enum AAOptions {
    OPTION_NO_AA,
    OPTION_FXAA,
@@ -112,13 +191,19 @@ inline SafetyHookInline g_deferred_fx_antialias_renderer_hook;
 
 extern uintptr_t* AAOptionBase;
 extern uintptr_t CDeferredFxAntialiasRenderer;
-extern uintptr_t* CDeferredFxRendererContext;
+extern uintptr_t* m_deferredFXRendererContext;
 extern CSceneViewportPrivateData* m_viewportPrivateData;
 extern CViewportShaderParameterProvider* m_viewportParamProvider;
+extern CDeferredFxAntialiasRendererS* m_deferredFxAntialiasRenderer;
+extern CDeferredFxRendererContextTextures m_deferredFXRendererContextTextures;
+extern CTexture* m_currDeferredFXAntialiasFrameTexture;
 extern uintptr_t JitterTableOffset;
 
 AAOptions GetAAOption();
 //float GetGameDeltaTime();
 //void GetViewportSize();
+
+using fnGetExistingSharedTexture = __int64(__fastcall*)(__int64 a1, unsigned int a2);
+extern fnGetExistingSharedTexture GetExistingSharedTexture;
 
 __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintptr_t* a2);

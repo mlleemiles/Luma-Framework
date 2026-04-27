@@ -1,6 +1,6 @@
 #include "Includes/Common.hlsl"
 
-cbuffer Viewport : register(b0)
+cbuffer cbViewport : register(b0)
 {
   float4 CameraNearPlaneSize : packoffset(c0);
   float4x4 DepthTextureTransform : packoffset(c1);
@@ -74,8 +74,8 @@ cbuffer Viewport : register(b0)
   uint2 SelectedPixel : packoffset(c185.z);
 }
 
-Texture2D<float4> DeferredFXAntialias__GBufferVelocityTexture__TexObj__ : register(t0);
-Texture2D<float4> Viewport__DepthVPSampler__TexObj__ : register(t1);
+Texture2D<float4> g_gBufferVelocityTex : register(t0);
+Texture2D<float4> g_depthTex : register(t1);
 RWTexture2D<float2> g_updatedVelocityTex : register(u0);
 RWTexture2D<float> g_unjitteredDepthTex : register(u1);
 
@@ -93,7 +93,7 @@ RWTexture2D<float> g_unjitteredDepthTex : register(u1);
 
 float3 UVToView(float2 uv, uint2 xy)
 {   
-	float rawDepthValue = Viewport__DepthVPSampler__TexObj__[xy].x;
+	float rawDepthValue = g_depthTex[xy].x;
     float2 ndcXY = uv * 2.0 - 1.0;
     ndcXY.y = -ndcXY.y;
     
@@ -107,7 +107,7 @@ float3 UVToView(float2 uv, uint2 xy)
 // Calculate the pixel's UV-space movement since last frame due to camera movement, and its view-space depth
 void CalculateCameraBasedVelocity_ViewSpaceDepth(out float2 velocity, in const float2 uv, in const uint2 xy)
 {
-	float depth = Viewport__DepthVPSampler__TexObj__.Load(int3((int2)xy, 0)).x;
+	float depth = g_depthTex.Load(int3((int2)xy, 0)).x;
 	float4 depth4 = mul( float4(0.0f, 0.0f, depth, 1.0f), InvProjectionMatrix );
 	float worldDepth = -depth4.z / depth4.w;
 
@@ -154,7 +154,7 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 	
 	float2 jitterDelta = LumaData.GameData.CurrJitters - LumaData.GameData.PrevJitters;
 	
-	float4 gBufferVelocity = DeferredFXAntialias__GBufferVelocityTexture__TexObj__[tid];
+	float2 gBufferVelocity = g_gBufferVelocityTex.Load(int3((int2)tid, 0)).xy;
 	
 	bool isDynamicObject = ( gBufferVelocity.r != 0.0f || gBufferVelocity.g != 0.0f );
     bool isExcludedObject = false;
@@ -178,5 +178,5 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 
 	g_updatedVelocityTex[tid] = velocity;// * 1000.f;
 	
-	g_unjitteredDepthTex[tid] = Viewport__DepthVPSampler__TexObj__.Load(int3((int2)tid, 0)).x;//Viewport__DepthVPSampler__TexObj__.SampleLevel(Viewport__DepthVPSampler__SampObj___s, pixelUV.xy - LumaData.GameData.CurrJitters, 0).x;
+	g_unjitteredDepthTex[tid] = g_depthTex.Load(int3((int2)tid, 0)).x;//g_depthTex.SampleLevel(Viewport__DepthVPSampler__SampObj___s, pixelUV.xy - LumaData.GameData.CurrJitters, 0).x;
 }
