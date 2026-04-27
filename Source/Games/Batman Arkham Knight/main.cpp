@@ -81,6 +81,8 @@ namespace
         memcpy((void*)patch_addr, jmp, sizeof(jmp)); // Write the jump
 
         VirtualProtect((void*)patch_addr, stolen_len, old_protect, &old_protect);
+
+        FlushInstructionCache(GetCurrentProcess(), (void*)patch_addr, stolen_len);
     }
 
     void JitterUpdate(bool enabled, float renderer_resolution_x, float renderer_resolution_y)

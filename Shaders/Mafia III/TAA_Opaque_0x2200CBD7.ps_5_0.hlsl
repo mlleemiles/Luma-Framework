@@ -18,8 +18,8 @@ cbuffer cb0 : register(b0)
 
 #define cmp
 
-// TAA runs in 3 passes in this game, it only jittered depth.
-// Each pass does a part of the scene.
+// TAA runs in 3 passes in this game, it only jittered depth and edges originally.
+// Each pass draws a "layer" of the scene (opaque, transparent and subsurface scattering).
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : TEXCOORD0,

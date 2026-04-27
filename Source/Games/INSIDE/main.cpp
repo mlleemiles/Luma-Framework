@@ -33,6 +33,8 @@ namespace
             std::memcpy(pattern_address, &target_aspect_ratio, sizeof(float));
             DWORD temp_protect;
             VirtualProtect(pattern_address, 1, old_protect, &temp_protect);
+
+            FlushInstructionCache(GetCurrentProcess(), pattern_address, 1);
          }
       }
 

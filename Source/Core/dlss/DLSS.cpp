@@ -255,7 +255,7 @@ bool NGX::DLSS::IsSupported(const SR::InstanceData* data) const
 int NGX::DLSS::GetJitterPhases(const SR::InstanceData* data) const
 {
 	// Nvidia suggested formula.
-	constexpr int base_phases = 8; // We start from a baseline of 8, for native resolution (DLAA).
+	constexpr int base_phases = SR::GetDefaultJitterPhases(); // We start from a baseline of 8, for native resolution (DLAA).
 	// Use Y resolution as it's generally more reliable.
    return std::lrintf(float(base_phases) * pow(max(float(data->settings_data.output_height) / float(data->settings_data.render_height), 1.f), 2.f));
 }

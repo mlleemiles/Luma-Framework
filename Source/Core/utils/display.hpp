@@ -636,7 +636,7 @@ namespace Display
 	static_assert(false, "Your Windows SDK is too old and lacks some features to check/engage for HDR on the display. Either upgrade to \"Windows 11 SDK 10.0.26100.0\" or disable this assert locally (the code will fall back on older features that might not work as well).");
 	#endif
 
-	bool GetDisplayConfigPathInfo(HWND hwnd, DISPLAYCONFIG_PATH_INFO& outPathInfo)
+	bool GetDisplayConfigPathInfo(HWND hwnd, HMONITOR fallbackMonitor, DISPLAYCONFIG_PATH_INFO& outPathInfo)
 	{
 		uint32_t pathCount, modeCount;
 		if (ERROR_SUCCESS != GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount))
@@ -652,10 +652,16 @@ namespace Display
 			return false;
 		}
 
-		const auto monitorFallback = hwnd == 0 ? MONITOR_DEFAULTTOPRIMARY : MONITOR_DEFAULTTONULL; // We prefer simply failing than using the closest/primary monitor if the window doesn't overlap any
-		const HMONITOR monitorFromWindow = MonitorFromWindow(hwnd, monitorFallback);
-		for (auto& pathInfo : paths)
+		// We prefer simply failing than using the closest/primary monitor if the window doesn't overlap any, nor we specify a fallback
+		const auto monitorFallbackMode = (hwnd == 0 && fallbackMonitor == 0) ? MONITOR_DEFAULTTOPRIMARY : MONITOR_DEFAULTTONULL;
+		HMONITOR targetMonitor = MonitorFromWindow(hwnd, monitorFallbackMode);
+		if (targetMonitor == 0)
 		{
+			targetMonitor = fallbackMonitor;
+		}
+		for (uint32_t i = 0; i < pathCount; i++)
+		{
+			auto& pathInfo = paths[i];
 			if (pathInfo.flags & DISPLAYCONFIG_PATH_ACTIVE && pathInfo.sourceInfo.statusFlags & DISPLAYCONFIG_SOURCE_IN_USE)
 			{
 				const bool bVirtual = pathInfo.flags & DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE;
@@ -667,8 +673,8 @@ namespace Display
 				RECT rect{ sourceMode.position.x, sourceMode.position.y, sourceMode.position.x + (LONG)sourceMode.width, sourceMode.position.y + (LONG)sourceMode.height };
 				if (!IsRectEmpty(&rect))
 				{
-					const HMONITOR monitorFromMode = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL); // No need to default this to the primary or closest, it should never be a problem
-					if (monitorFromMode != nullptr && monitorFromMode == monitorFromWindow)
+					const HMONITOR currentMonitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL); // No need to default this to the primary or closest, it should never be a problem
+					if (currentMonitor != nullptr && currentMonitor == targetMonitor)
 					{
 						outPathInfo = pathInfo;
 						return true;
@@ -686,7 +692,7 @@ namespace Display
 	bool GetColorInfo(HWND hwnd, DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO& outColorInfo)
 	{
 		DISPLAYCONFIG_PATH_INFO pathInfo{};
-		if (GetDisplayConfigPathInfo(hwnd, pathInfo))
+		if (GetDisplayConfigPathInfo(hwnd, 0, pathInfo))
 		{
 			DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO colorInfo{};
 			colorInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
@@ -707,7 +713,7 @@ namespace Display
 	bool GetColorInfo2(HWND hwnd, DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2& outColorInfo2)
 	{
 		DISPLAYCONFIG_PATH_INFO pathInfo{};
-		if (GetDisplayConfigPathInfo(hwnd, pathInfo))
+		if (GetDisplayConfigPathInfo(hwnd, 0, pathInfo))
 		{
 			DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 colorInfo2{};
 			colorInfo2.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2;
@@ -857,6 +863,26 @@ namespace Display
 		return false;
 	}
 
+   bool GetSDRWhiteLevel(HWND hwnd, float& nits)
+   {
+      DISPLAYCONFIG_PATH_INFO pathInfo{};
+      if (GetDisplayConfigPathInfo(hwnd, 0, pathInfo))
+      {
+         DISPLAYCONFIG_SDR_WHITE_LEVEL sdrWhite = {};
+         sdrWhite.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+         sdrWhite.header.size = sizeof(sdrWhite);
+			sdrWhite.header.adapterId = pathInfo.targetInfo.adapterId;
+			sdrWhite.header.id = pathInfo.targetInfo.id;
+			auto result = DisplayConfigGetDeviceInfo(&sdrWhite.header);
+			if (result == ERROR_SUCCESS)
+			{
+            nits = (float)sdrWhite.SDRWhiteLevel / 1000.0f * 80.0f;
+				return true;
+			}
+      }
+      return false;
+   }
+
 	#define DISPLAYCONFIG_DEVICE_INFO_SET_SDR_WHITE_LEVEL (DISPLAYCONFIG_DEVICE_INFO_TYPE)0xFFFFFFEE
 	typedef struct __declspec(align(4)) _DISPLAYCONFIG_SET_SDR_WHITE_LEVEL
 	{
@@ -866,7 +892,7 @@ namespace Display
 	} DISPLAYCONFIG_SET_SDR_WHITE_LEVEL;
 
 	// NOTE: Undocumented Windows feature. USE AT YOUR OWN RISK.
-	bool SetSDRWhiteLevel(HWND hwnd, float nits = 80.f /*Windows sRGB standard luminance*/)
+	bool SetSDRWhiteLevel(HWND hwnd, float nits = srgb_white_level)
 	{
 		DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO colorInfo{};
 		if (GetColorInfo(hwnd, colorInfo))

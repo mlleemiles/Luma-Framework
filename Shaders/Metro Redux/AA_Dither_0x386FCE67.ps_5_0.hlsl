@@ -3,9 +3,11 @@
 #define FXAA_QUALITY__PRESET 39
 #endif
 
+#include "./Common.hlsl"
+
 #include "../Includes/ColorGradingLUT.hlsl"
-#include "../Includes/Common.hlsl"
 #include "../Includes/FXAA.hlsl"
+#include "./renodx/effects.hlsl"
 
 // Enables FXAA (Luma's improved implementation)
 #ifndef ENABLE_FXAA
@@ -117,7 +119,7 @@ void main(
   o0.xyz = pow(abs(o0.xyz), 2.2) * Sign_Fast(o0.xyz);
 #endif
   float3 untonemapped_bt2020 = BT709_To_BT2020(o0.xyz);
-  untonemapped_bt2020 = gamma_sRGB_to_linear(untonemapped_bt2020);
+  untonemapped_bt2020 = gamma_sRGB_to_linear(untonemapped_bt2020, GCT_MIRROR);
 
   float peak = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
   float diffuse_white = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
@@ -127,7 +129,9 @@ void main(
   float3 tonemapped_bt2020 = NeutwoPerChannel(untonemapped_bt2020, peak);
   float3 tonemapped_bt709 = BT2020_To_BT709(tonemapped_bt2020);
 
-  tonemapped_bt709 = linear_to_sRGB_gamma(tonemapped_bt709);
+  tonemapped_bt709 = renodx::effects::ApplyFilmGrain(tonemapped_bt709, uv, LumaSettings.GameSettings.custom_random, LumaSettings.GameSettings.custom_film_grain_strength * 0.03f);
+
+  tonemapped_bt709 = linear_to_sRGB_gamma(tonemapped_bt709, GCT_MIRROR);
   o0.xyz = tonemapped_bt709;
 
 }

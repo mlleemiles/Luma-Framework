@@ -48,12 +48,22 @@ namespace System
    };
    static constexpr BytePattern ANY{BytePattern::WildcardType::Wildcard};
 
+   enum class PatchMemoryType
+   {
+      // PAGE_EXECUTE_READWRITE
+      Code,
+      // PAGE_READWRITE
+      Data,
+   };
+
    // Returns all matches.
    // This just scans for a value, there's no "??" support in the pattern.
    std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<BytePattern>& pattern, bool stop_at_first = false);
    std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::byte* pattern, size_t pattern_size, bool stop_at_first = false);
    std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<std::byte>& pattern, bool stop_at_first = false);
    std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<uint8_t>& pattern, bool stop_at_first = false);
+
+   bool PatchMemory(void* address, const void* data, size_t size, PatchMemoryType type = PatchMemoryType::Code);
 
    // Allocate within +/-2GB to make it reachable by 32 bit offsets
    void* VirtualAllocNear(void* target, size_t size, DWORD protect = PAGE_EXECUTE_READWRITE);

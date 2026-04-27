@@ -134,6 +134,8 @@ namespace
 
             DWORD temp_protect;
             VirtualProtect(bs2_weapon_fov_matches[0], bs2_weapon_fov_patch.size(), old_protect, &temp_protect);
+
+            FlushInstructionCache(GetCurrentProcess(), bs2_weapon_fov_matches[0], bs2_weapon_fov_patch.size());
          }
          ASSERT_ONCE(success);
       }

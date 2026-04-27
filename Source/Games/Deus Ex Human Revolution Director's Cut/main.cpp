@@ -131,6 +131,8 @@ namespace
 
             DWORD temp_protect;
             VirtualProtect(pattern_og_post_process_addresses[0], patch_og_post_process.size(), old_protect, &temp_protect);
+
+            FlushInstructionCache(GetCurrentProcess(), pattern_og_post_process_addresses[0], patch_og_post_process.size());
          }
       }
    }
@@ -175,12 +177,16 @@ namespace
             DWORD temp_protect;
             VirtualProtect(pattern_ui_scale_1_addresses[0], pattern_1_patch.size(), old_protect, &temp_protect);
 
+            FlushInstructionCache(GetCurrentProcess(), pattern_ui_scale_1_addresses[0], pattern_1_patch.size());
+
             success = VirtualProtect(pattern_ui_scale_2_addresses[0], pattern_2_patch.size(), PAGE_EXECUTE_READWRITE, &old_protect);
             if (success)
             {
                std::memcpy(pattern_ui_scale_2_addresses[0], pattern_2_patch.data(), pattern_2_patch.size());
 
                VirtualProtect(pattern_ui_scale_2_addresses[0], pattern_2_patch.size(), old_protect, &temp_protect);
+
+               FlushInstructionCache(GetCurrentProcess(), pattern_ui_scale_2_addresses[0], pattern_2_patch.size());
             }
          }
          ASSERT_ONCE(success);

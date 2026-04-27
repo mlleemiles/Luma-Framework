@@ -482,7 +482,7 @@ void main(
       luttedColor = pow(luttedColor, 2.2);
 #endif
 
-#if ENABLE_LUMA // Attempt to undo the yellow filter the game LUT applied
+#if ENABLE_LUMA // Attempt to undo the yellow filter the game LUT applied (actually it's usually not in the LUT)
       float3 lutMidGreyGamma = t9.Sample(s2_s, 0.5).rgb;
       float3 lutMidGreyLinear = pow(abs(lutMidGreyGamma), 2.2) * sign(lutMidGreyGamma); // Turn linear
       float lutMidGreyBrightnessLinear = max(GetLuminance(lutMidGreyLinear), 0.0); // Normalize it by luminance

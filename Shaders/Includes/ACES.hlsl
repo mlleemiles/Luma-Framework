@@ -725,7 +725,7 @@ float3 ACESTonemap(float3 color, float paper_white, float peak_white, ACESSettin
 	static const float ACES_SDR_NITS = 48.f;
 
 	float mid_gray_scale = 0.18f / settings.mid_grey; //TODO: check
-	float aces_min = ACES_MIN / paper_white;
+	float aces_min = ACES_MIN / paper_white; //TODO: why are we doing this? Fix. Remove PaperW and simply pre-divided the peak by PaperW.
 	float aces_max = peak_white / paper_white;
 
 	// Apply the inverse of the final gamma correction to the min nits parameter, to have it reliably set

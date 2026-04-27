@@ -12,10 +12,9 @@
 
 #define LUT_3D 1
 
-#include "../Includes/Common.hlsl"
+#include "./Common.hlsl"
 #include "../Includes/Tonemap.hlsl"
 #include "../Includes/Reinhard.hlsl"
-
 #include "../Includes/ColorGradingLUT.hlsl"
 
 #define USE_VANILLA 0
@@ -41,9 +40,21 @@ float3 ExtendedUncharted2(float3 untonemapped) {
   return outputColor;
 }
 
+float3 VanillaUncharted2(float3 r0) {
+    float3 r1, r3;
+    r1.xyz = r0.xyz * float3(0.150000006, 0.150000006, 0.150000006) + float3(0.0500000007, 0.0500000007, 0.0500000007);
+    r1.xyz = r0.xyz * r1.xyz + float3(0.00400000019, 0.00400000019, 0.00400000019);
+    r3.xyz = r0.xyz * float3(0.150000006, 0.150000006, 0.150000006) + float3(0.5, 0.5, 0.5);
+    r0.xyz = r0.xyz * r3.xyz + float3(0.0600000024, 0.0600000024, 0.0600000024);
+    r0.xyz = r1.xyz / r0.xyz;
+    r0.xyz = float3(-0.0666666627, -0.0666666627, -0.0666666627) + r0.xyz;
+    r0.xyz *= float3(4.53191471, 4.53191471, 4.53191471); // Removed bloom contribution
+    return r0;
+}
+
 float ComputeReinhardSmoothClampScale(float3 untonemapped, float rolloff_start = 0.375f, float output_max = 1.f, float white_clip = 100.f) {
     float peak = max(untonemapped.r, max(untonemapped.g, untonemapped.b));
-    float mapped_peak = Reinhard::ReinhardRange(peak, rolloff_start, white_clip, output_max).x;
+    float mapped_peak = Reinhard::ReinhardRange(peak, rolloff_start, white_clip, output_max, true).x;
     float scale = safeDivision(mapped_peak, peak, 1);
 
     return scale;
@@ -343,14 +354,16 @@ void main(
   r1.z = r1.w * r0.x + 0.5;
   r3.xyzw = t_lensdirt.Sample(s_clamp_tri_s, r1.xz).xyzw;
   r1.xyz = t_bloom_b.Sample(s_clamp_bi_s, r1.xy).xyz;
+
+  r1.xyz = FakeHDR(r1.xyz, 0.04f, 0.22f); // Boost bloom to make the HDR upgrade more coherent
+
+  r3.xyz *= LumaSettings.GameSettings.custom_lens_dirt;
+  r1.xyz *= LumaSettings.GameSettings.custom_bloom;
+
   r3.xyz = r3.xyz * r3.www;
   r3.xyz = float3(5,5,5) * r3.xyz;
   r0.x = pp_gasmask.w * 5 + 1;
   r3.xyz = r3.xyz * r0.xxx + float3(1,1,1);
-
-  //r3.xyz *= CUSTOM_LENS_DIRT;
-  //r1.xyz *= CUSTOM_BLOOM;
-
   r4.xyz = r3.xyz * r1.xyz;
   r0.xyz = r1.xyz * r3.xyz + r0.yzw;
 #if USE_VANILLA
@@ -371,16 +384,17 @@ void main(
   {
     float2 near_origin = sun_position.xy + shafts_dir * (1.0 / 64.0);
     float3 shafts_near_sum = SampleLightShaftsLevel(near_origin, shafts_dir);
+
     shafts_sum = (shafts_sum + shafts_near_sum) * 0.5;
   }
 
   r0.xyz += shafts_sum * lshafts_color.xyz;
-
+  
 #endif
 
   float3 untonemapped = r0.xyz;
   float3 tonemapped_bt709;
-  float scale = 1.f;
+  float scale = 1;
   
 #if USE_VANILLA
 // UC2 tonemap
@@ -389,15 +403,44 @@ void main(
   r3.xyz = r0.xyz * float3(0.150000006,0.150000006,0.150000006) + float3(0.5,0.5,0.5);
   r0.xyz = r0.xyz * r3.xyz + float3(0.0600000024,0.0600000024,0.0600000024);
   r0.xyz = r1.xyz / r0.xyz;
-  r0.xyz = float3(-0.0666666627,-0.0666666627,-0.0666666627) + r0.xyz;
-  r1.xyz = float3(0.125,0.125,0.125) * r4.xyz;
+  r0.xyz = float3(-0.0666666627, -0.0666666627, -0.0666666627) + r0.xyz;
+  r1.xyz = float3(0.125, 0.125, 0.125) * r4.xyz;
   r0.xyz = r0.xyz * float3(4.53191471, 4.53191471, 4.53191471) + r1.xyz;
   tonemapped_bt709 = r0.xyz;
 #else
-  tonemapped_bt709 = ExtendedUncharted2(untonemapped);
+  float3 additive_bloom = r4.xyz * 0.125f;
+
+  untonemapped += additive_bloom; // change from vanilla behavior, apply bloom before tonemapping
+
+  ColorGradeConfig config = DefaultColorGradeConfig();
+  config.exposure = LumaSettings.GameSettings.exposure;
+  config.highlights = LumaSettings.GameSettings.highlights;
+  config.shadows = LumaSettings.GameSettings.shadows;
+  config.contrast = LumaSettings.GameSettings.contrast;
+  config.flare = 0.10f * pow(LumaSettings.GameSettings.flare, 10.f);
+  config.saturation = LumaSettings.GameSettings.saturation;
+  config.dechroma = LumaSettings.GameSettings.blowout;
+  config.blowout = -1.f * (LumaSettings.GameSettings.highlight_saturation - 1.f);
+
+  const float mid_gray = 0.18f;
+  float mid_gray_out = VanillaUncharted2(mid_gray).x;
+  float slider_lum = GetLuminance(untonemapped);
+  untonemapped = ApplyExposureContrastFlareHighlightsShadowsByLuminance(untonemapped, slider_lum, config, mid_gray_out);
+  float3 tonemapped_bt709_ch = ExtendedUncharted2(untonemapped);
+
+  float lum_in = GetLuminance(untonemapped);
+  float lum_out = ExtendedUncharted2(lum_in).x;
+  float3 tonemapped_bt709_lum = untonemapped * safeDivision(lum_out, lum_in, 1);
+  tonemapped_bt709 = RestoreChrominance(tonemapped_bt709_lum, tonemapped_bt709_ch);
+
+  tonemapped_bt709 = ApplySaturationBlowoutHueCorrectionHighlightSaturation(tonemapped_bt709, GetLuminance(tonemapped_bt709), config);
+
+  //tonemapped_bt709 += additive_bloom; // Vanilla bloom application
+
   scale = ComputeReinhardSmoothClampScale(tonemapped_bt709);
-  float3 scaled_bt709 = tonemapped_bt709 * scale;
-  r0.xyz = scaled_bt709;
+  tonemapped_bt709 *= scale;
+  r0.xyz = tonemapped_bt709;
+
 #endif
 
 #if HAS_GASMASK
@@ -425,22 +468,22 @@ void main(
   r0.w = dot(r0.xyz, float3(0.298999995, 0.587000012, 0.114)); // BT.601 coefficients, bad
   o0.w = sqrt(r0.w);
 #else
-  #if 1
-  r1.xyz = t_grade.Sample(s_clamp_bi_s, r0.zyx).xyz;
+#if 1
+  r1.xyz = t_grade.Sample(s_clamp_bi_s, r0.zyx).xyz; // Also applies fade to black!
   r0.xyz = r1.zyx * float3(2, 2, 2) + r0.xyz;
   r0.xyz = float3(-1, -1, -1) + r0.xyz;
-  r0.xyz = max(0, r0.xyz);
-  #else
-  r1.xyz = SampleLUT(t_grade, s_clamp_bi_s, r0.xyz, 16u, true);
-  r0.xyz = r1.zyx * float3(2, 2, 2) + r0.xyz;
-  r0.xyz = float3(-1, -1, -1) + r0.xyz;
-  //r0.xyz = AddColorOffsetDampened(r0.xyz, 0.05f);
-  //r0.xyz = max(0, r0.xyz);
-  // r0.xyz = EmulateShadowClip(r0.xyz);
-  #endif
 
   r0.xyz /= scale;
+#else
+  r1.xyz = SampleLUT(t_grade, s_clamp_bi_s, r0.zyx, 16u, true);
+  r0.xyz = r1.zyx * float3(2, 2, 2) + r0.xyz;
+  r0.xyz = float3(-1, -1, -1) + r0.xyz;
+  r0.xyz = AddColorOffsetDampened(r0.xyz, r1.zyx);
+  //r0.xyz = max(0, r0.xyz);
+  // r0.xyz = EmulateShadowClip(r0.xyz);
 
+  r0.xyz /= scale;
+  #endif
   r0.w = GetLuminance(r0.xyz);
   o0.w = linear_to_gamma(r0.w).x;
 #endif

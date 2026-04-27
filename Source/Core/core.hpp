@@ -275,6 +275,7 @@ namespace
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    bool strip_original_shaders_debug_data = false;
 #endif
+   bool use_os_reference_white_level = true;
 
 #if ENABLE_SR
    SR::UserType sr_user_type = SR::UserType::Auto; // If set to a non "None" value, some SR tech is enabled by the user (but not necessarily supported+initialized correctly, that's by device)
@@ -8780,6 +8781,10 @@ namespace
                      std::unique_lock device_write_lock(device_data.mutex);
                      device_data.temp_copy_source_texture = temp_copy_source_texture;
                   }
+                  else
+                  {
+                     native_device_context->CopyResource(temp_copy_source_texture.get(), source_resource_texture.get());
+                  }
                   proxy_source_resource_texture = temp_copy_source_texture;
                }
                com_ptr<ID3D11ShaderResourceView> source_resource_texture_view;
@@ -12765,13 +12770,29 @@ namespace
                      {
                         cb_luma_global_settings.ScenePeakWhite = device_data.default_user_peak_white;
                      }
-                     if (!reshade::get_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite))
+                     if (use_os_reference_white_level)
                      {
-                        cb_luma_global_settings.ScenePaperWhite = default_paper_white;
+                        float hdr_paper_white = 80.f;
+                        if (Display::GetSDRWhiteLevel(0, hdr_paper_white))
+                        {
+                           cb_luma_global_settings.ScenePaperWhite = hdr_paper_white;
+                           cb_luma_global_settings.UIPaperWhite = hdr_paper_white;
+                        }
+                        else
+                        {
+                           use_os_reference_white_level = false;
+                        }
                      }
-                     if (!reshade::get_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite))
+                     if (!use_os_reference_white_level)
                      {
-                        cb_luma_global_settings.UIPaperWhite = default_paper_white;
+                        if (!reshade::get_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite))
+                        {
+                           cb_luma_global_settings.ScenePaperWhite = default_paper_white;
+                        }
+                        if (!reshade::get_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite))
+                        {
+                           cb_luma_global_settings.UIPaperWhite = default_paper_white;
+                        }
                      }
                      // Align all the parameters for the SDR on HDR mode (the game paper white can still be changed)
                      if (display_mode >= DisplayModeType::SDRInHDR)
@@ -12793,10 +12814,39 @@ namespace
                {
                   static const char* scene_paper_white_name = "Scene Paper White";
                   static const char* paper_white_name = "Paper White";
-                  if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, 500.f, "%.f"))
+
+                  assert(!use_os_reference_white_level || !has_separate_ui_paper_white); // "use_os_reference_white_level" mode only uses one slider (scene paper white)!
+                  if (ImGui::Checkbox("Link to OS Reference White Level", &use_os_reference_white_level))
+                  {
+                     if (use_os_reference_white_level)
+                     {
+                        // Note: this is not fully "safe" to do, so let's rely on users manually setting this instead.
+                        // Clamp to the range accepted by Windows 11 as of 2026, otherwise it fails.
+                        if (!Display::SetSDRWhiteLevel(game_window, std::clamp(cb_luma_global_settings.ScenePaperWhite, 80.f, 480.f)))
+                        {
+                           use_os_reference_white_level = false;
+                        }
+                     }
+
+                     reshade::set_config_value(runtime, NAME, "UseOSReferenceWhiteLevel", use_os_reference_white_level);
+                  }
+                  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                  {
+                     ImGui::SetTooltip("Links Luma's HDR Paper White value to the Windows SDR content brightness slider (Reference/Diffuse White Level).\nThis makes the game cursor brightness match the one of the game.");
+                  }
+
+                  const float max_white_level = use_os_reference_white_level ? 480.f : 500.f; // Windows SDR Reference White Level max is 480 nits! We use 500 otherwise (both are hardcoded elsewhere too!)
+
+                  if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, max_white_level, "%.f"))
                   {
                      cb_luma_global_settings.ScenePaperWhite = max(cb_luma_global_settings.ScenePaperWhite, 0.0);
                      reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+
+                     if (use_os_reference_white_level)
+                     {
+                        Display::SetSDRWhiteLevel(game_window, cb_luma_global_settings.ScenePaperWhite);
+                        // Assumes "has_separate_ui_paper_white" being false, "cb_luma_global_settings.UIPaperWhite" is updated later
+                     }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                   {
@@ -12809,6 +12859,12 @@ namespace
                      if (ImGui::SmallButton(ICON_FK_WARNING))
                      {
                         cb_luma_global_settings.ScenePaperWhite = default_paper_white;
+                        reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+
+                        if (use_os_reference_white_level)
+                        {
+                           Display::SetSDRWhiteLevel(game_window, cb_luma_global_settings.ScenePaperWhite);
+                        }
                      }
                      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                      {
@@ -12824,6 +12880,11 @@ namespace
                      {
                         cb_luma_global_settings.ScenePaperWhite = default_paper_white;
                         reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+
+                        if (use_os_reference_white_level)
+                        {
+                           Display::SetSDRWhiteLevel(game_window, cb_luma_global_settings.ScenePaperWhite);
+                        }
                      }
                      ImGui::PopID();
                   }
@@ -12885,7 +12946,7 @@ namespace
                }
 
                const bool mod_active = IsModActive(device_data);
-               const bool has_separate_ui_paper_white = GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 1;
+               const bool has_separate_ui_paper_white = GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 1 && !use_os_reference_white_level;
                if (display_mode == DisplayModeType::HDR)
                {
                   ImGui::BeginDisabled(!mod_active);
@@ -12934,13 +12995,6 @@ namespace
                      {
                         cb_luma_global_settings.UIPaperWhite = max(cb_luma_global_settings.UIPaperWhite, 0.0);
                         reshade::set_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
-
-                        // This is not safe to do, so let's rely on users manually setting this instead.
-                        // Also note that this is a test implementation, it doesn't react to all places that change "cb_luma_global_settings.UIPaperWhite", and does not restore the user original value on exit.
-#if 0
-                        // This makes the game cursor have the same brightness as the game's UI
-                        SetSDRWhiteLevel(game_window, std::clamp(cb_luma_global_settings.UIPaperWhite, 80.f, 480.f));
-#endif
                      }
                      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                      {
@@ -12966,6 +13020,11 @@ namespace
                         ImGui::InvisibleButton("", ImVec2(size.x, size.y));
                      }
                      ImGui::EndDisabled();
+                  }
+                  // Force them to always be match if we automate the calibration, independently of the UI type of the mod
+                  else if (use_os_reference_white_level)
+                  {
+                     cb_luma_global_settings.UIPaperWhite = cb_luma_global_settings.ScenePaperWhite;
                   }
                }
                else if (display_mode >= DisplayModeType::SDRInHDR)
@@ -14532,8 +14591,24 @@ void Init(bool async)
          if (async)
             s_mutex_device.unlock_shared();
       }
-      reshade::get_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
-      reshade::get_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
+      if (reshade::get_config_value(runtime, NAME, "UseOSReferenceWhiteLevel", use_os_reference_white_level) && use_os_reference_white_level)
+      {
+         float hdr_paper_white = 80.f;
+         if (Display::GetSDRWhiteLevel(0, hdr_paper_white))
+         {
+            cb_luma_global_settings.ScenePaperWhite = hdr_paper_white;
+            cb_luma_global_settings.UIPaperWhite = hdr_paper_white;
+         }
+         else
+         {
+            use_os_reference_white_level = false;
+         }
+      }
+      if (!use_os_reference_white_level)
+      {
+         reshade::get_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+         reshade::get_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
+      }
       if (cb_luma_global_settings.DisplayMode == DisplayModeType::SDR)
       {
          cb_luma_global_settings.ScenePeakWhite = srgb_white_level;

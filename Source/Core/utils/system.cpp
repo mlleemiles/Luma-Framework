@@ -198,6 +198,41 @@ namespace System
       return ScanMemoryForPattern(base, size, reinterpret_cast<const std::byte*>(pattern.data()), pattern.size(), stop_at_first);
    }
 
+   bool PatchMemory(void* address, const void* data, size_t size, PatchMemoryType type)
+   {
+      // "PAGE_EXECUTE_READWRITE" can be temporarily set on data too, it's not going to be a problem
+      const DWORD new_protect = type == PatchMemoryType::Code ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+
+      DWORD old_protect;
+      BOOL success = VirtualProtect(address, size, new_protect, &old_protect);
+      if (success)
+      {
+         std::memcpy(address, data, size);
+
+         DWORD temp_protect;
+         VirtualProtect(address, size, old_protect, &temp_protect);
+
+         const DWORD old_protect_masked = old_protect & 0xFF;
+         bool was_executable = old_protect_masked == PAGE_EXECUTE ||
+                              old_protect_masked == PAGE_EXECUTE_READ ||
+                              old_protect_masked == PAGE_EXECUTE_READWRITE ||
+                              old_protect_masked == PAGE_EXECUTE_WRITECOPY;
+
+         // We only really need to check for "is_executable" but for extra safety this shouldn't hurt.
+         // If the code wasn't executable, then we don't need to flush it, even if we temporarily made it so.
+         if (type == PatchMemoryType::Code || was_executable)
+         {
+            FlushInstructionCache(GetCurrentProcess(), address, size);
+         }
+
+         // Error out if we tried to patch code as data or data as code (they are both ok but neither is good).
+         assert(was_executable == (type == PatchMemoryType::Code));
+
+         return true;
+      }
+      return false;
+   }
+
    void* VirtualAllocNear(void* target, size_t size, DWORD protect)
    {
       // Avoid messes with ReShade redefining min/max

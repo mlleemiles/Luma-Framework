@@ -363,7 +363,8 @@ void ApplyCrashFix()
 		relativeAddress = ((((DWORD)&crash_one_fix)) - (DWORD)crash_one_location) - 5;
 		*(DWORD*)(crash_one_array + 1) = relativeAddress;
 		memcpy(crash_one_location, crash_one_array, sizeof(crash_one_array));
-		VirtualProtect(crash_one_location, sizeof(crash_one_array), oldProtect, &oldProtect);
+      VirtualProtect(crash_one_location, sizeof(crash_one_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), crash_one_location, sizeof(crash_one_array));
 
 		PVOID crash_three_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0x4FF0FB);
 		BYTE crash_three_array[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
@@ -371,7 +372,8 @@ void ApplyCrashFix()
 		relativeAddress = ((((DWORD)&crash_three_fix)) - (DWORD)crash_three_location) - 5;
 		*(DWORD*)(crash_three_array + 1) = relativeAddress;
 		memcpy(crash_three_location, crash_three_array, sizeof(crash_three_array));
-		VirtualProtect(crash_three_location, sizeof(crash_three_array), oldProtect, &oldProtect);
+      VirtualProtect(crash_three_location, sizeof(crash_three_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), crash_three_location, sizeof(crash_three_array));
 
 		PVOID crash_four_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0x3087A8);
 		BYTE crash_four_array[] = { 0xE9, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x1F, 0x44, 0x00, 0x00 };
@@ -379,7 +381,8 @@ void ApplyCrashFix()
 		relativeAddress = ((((DWORD)&crash_four_fix)) - (DWORD)crash_four_location) - 5;
 		*(DWORD*)(crash_four_array + 1) = relativeAddress;
 		memcpy(crash_four_location, crash_four_array, sizeof(crash_four_array));
-		VirtualProtect(crash_four_location, sizeof(crash_four_array), oldProtect, &oldProtect);
+      VirtualProtect(crash_four_location, sizeof(crash_four_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), crash_four_location, sizeof(crash_four_array));
 
 		PVOID crash_five_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0xBE17D0);
 		BYTE crash_five_array[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
@@ -387,13 +390,15 @@ void ApplyCrashFix()
 		relativeAddress = ((((DWORD)&crash_five_fix)) - (DWORD)crash_five_location) - 5;
 		*(DWORD*)(crash_five_array + 1) = relativeAddress;
 		memcpy(crash_five_location, crash_five_array, sizeof(crash_five_array));
-		VirtualProtect(crash_five_location, sizeof(crash_five_array), oldProtect, &oldProtect);
+      VirtualProtect(crash_five_location, sizeof(crash_five_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), crash_five_location, sizeof(crash_five_array));
 
 		PVOID reverb_bytes_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0xC2EE5D);
 		BYTE reverb_bytes_array[] = { 0x90, 0xE9 };
 		VirtualProtect(reverb_bytes_location, sizeof(reverb_bytes_array), PAGE_EXECUTE_READWRITE, &oldProtect);
 		memcpy(reverb_bytes_location, reverb_bytes_array, sizeof(reverb_bytes_array));
-		VirtualProtect(reverb_bytes_location, sizeof(reverb_bytes_array), oldProtect, &oldProtect);
+      VirtualProtect(reverb_bytes_location, sizeof(reverb_bytes_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), reverb_bytes_location, sizeof(reverb_bytes_array));
 
 		PVOID app_error_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0xB55970);
 		BYTE app_error_array[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
@@ -401,7 +406,8 @@ void ApplyCrashFix()
 		relativeAddress = (((DWORD)&error_logger_function) - (DWORD)app_error_location) - 5;
 		*(DWORD*)(app_error_array + 1) = relativeAddress;
 		memcpy(app_error_location, app_error_array, sizeof(app_error_array));
-		VirtualProtect(app_error_location, sizeof(app_error_array), oldProtect, &oldProtect);
+      VirtualProtect(app_error_location, sizeof(app_error_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), app_error_location, sizeof(app_error_array));
 
 		PVOID crash_six_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0xBF3030);
 		BYTE crash_six_array[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
@@ -409,7 +415,8 @@ void ApplyCrashFix()
 		relativeAddress = ((((DWORD)&crash_six_fix)) - (DWORD)crash_six_location) - 5;
 		*(DWORD*)(crash_six_array + 1) = relativeAddress;
 		memcpy(crash_six_location, crash_six_array, sizeof(crash_six_array));
-		VirtualProtect(crash_six_location, sizeof(crash_six_array), oldProtect, &oldProtect);
+      VirtualProtect(crash_six_location, sizeof(crash_six_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), crash_six_location, sizeof(crash_six_array));
 
 		PVOID crash_seven_location = reinterpret_cast<PVOID>(Bioshock2HDEXE + 0x737395);
 		BYTE crash_seven_array[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
@@ -417,7 +424,8 @@ void ApplyCrashFix()
 		relativeAddress = ((((DWORD)&crash_seven_fix)) - (DWORD)crash_seven_location) - 5;
 		*(DWORD*)(crash_seven_array + 1) = relativeAddress;
 		memcpy(crash_seven_location, crash_seven_array, sizeof(crash_seven_array));
-		VirtualProtect(crash_seven_location, sizeof(crash_seven_array), oldProtect, &oldProtect);
+      VirtualProtect(crash_seven_location, sizeof(crash_seven_array), oldProtect, &oldProtect);
+      FlushInstructionCache(GetCurrentProcess(), crash_seven_location, sizeof(crash_seven_array));
 
 #ifdef LOGGING_ENABLED
 		while (TRUE)

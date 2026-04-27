@@ -159,6 +159,8 @@ namespace Patches
          std::memcpy(pattern_address, &target_aspect_ratio, sizeof(float));
          DWORD temp_protect;
          VirtualProtect(pattern_address, sizeof(float), old_protect, &temp_protect);
+
+         FlushInstructionCache(GetCurrentProcess(), pattern_address, sizeof(float));
       }
 
       for (auto pattern_address : pattern_2_addresses)
@@ -173,6 +175,8 @@ namespace Patches
          std::memcpy(pattern_address, &custom_value, sizeof(float)); // We only replace the first float of the pattern
          DWORD temp_protect;
          VirtualProtect(pattern_address, sizeof(float), old_protect, &temp_protect);
+
+         FlushInstructionCache(GetCurrentProcess(), pattern_address, sizeof(float));
       }
 
       // The field of view (directly affects it)

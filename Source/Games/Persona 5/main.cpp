@@ -948,10 +948,12 @@ public:
       game_device_data.has_drawn_upscaling = false;
 
       // Update TAA jitters:
-      int phases = 16;           // Decent default for any modern TAA
-      const int base_phases = 8; // For DLAA
-      // We round to the cloest int, though maybe we should floor? Unclear. Both are probably fine.
-      phases = (int)std::lrint(float(base_phases) * powf(float(max(game_device_data.render_resolution.x, 1)) / float(max(game_device_data.render_resolution.y, 1)), 2.f));
+      int phases = SR::GetDefaultJitterPhases();
+      if (device_data.sr_type != SR::Type::None)
+      {
+         auto* sr_instance_data = device_data.GetSRInstanceData();
+         phases = sr_implementations[device_data.sr_type]->GetJitterPhases(sr_instance_data);
+      }
       int temporal_frame = cb_luma_global_settings.FrameIndex % phases;
       projection_jitters.x = SR::HaltonSequence(temporal_frame, 2);
       projection_jitters.y = SR::HaltonSequence(temporal_frame, 3);

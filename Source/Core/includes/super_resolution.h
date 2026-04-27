@@ -46,7 +46,7 @@ namespace SR
 	
 	// E.g. use base 2 for x and base 3 for y.
 	// Index should go from 0 to phases-1.
-	// Returns [-0.5 0.5].
+	// Returns [-0.5 0.5] (pixel space).
 	constexpr float HaltonSequence(unsigned int index, unsigned int base)
 	{
       index += 1; // Add 1 to avoid skewing towards 0, given that 0 always results in 0.
@@ -61,6 +61,9 @@ namespace SR
 		}
 		return result - 0.5;
 	}
+
+	// 8 is usually great for native resolution TAA
+	constexpr int GetDefaultJitterPhases() { return 8; }
 	
 	static float GetMipLODBias(float render_height, float output_height)
 	{
@@ -177,8 +180,8 @@ namespace SR
 			unsigned int render_height = 0;
 
 			float pre_exposure = 0.f; // Ignored if 0
-			float jitter_x = 0.f; // In UV space (from -0.5 to 0.5, not influenced by resolution)
-			float jitter_y = 0.f; // In UV space (from -0.5 to 0.5, not influenced by resolution)
+			float jitter_x = 0.f; // In pixel space (from -0.5 to 0.5, the value here is influenced by resolution)
+			float jitter_y = 0.f; // In pixel space (from -0.5 to 0.5, the value here is influenced by resolution)
 			float vert_fov = 0.f; // Radians. Ignored if 0 (not always needed)
 			float near_plane = 0.01f; // In meters
 			float far_plane = 1000.f; // In meters
