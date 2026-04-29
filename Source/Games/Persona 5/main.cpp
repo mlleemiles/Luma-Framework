@@ -56,98 +56,98 @@ namespace
 
    bool PatchSamplerStates()
    {
-       constexpr size_t stolenLen = 18;              // Length of bytes we are overwriting
+      constexpr size_t stolenLen = 18; // Length of bytes we are overwriting
 
-       const HMODULE hModule = GetModuleHandleA(nullptr);
-       const uintptr_t baseAddr = (uintptr_t)hModule;
+      const HMODULE hModule = GetModuleHandleA(nullptr);
+      const uintptr_t baseAddr = (uintptr_t)hModule;
 
-       auto dosHeader = (PIMAGE_DOS_HEADER)baseAddr;
-       auto ntHeaders = (PIMAGE_NT_HEADERS)baseAddr + dosHeader->e_lfanew;
+      auto dosHeader = (PIMAGE_DOS_HEADER)baseAddr;
+      auto ntHeaders = (PIMAGE_NT_HEADERS)baseAddr + dosHeader->e_lfanew;
 
-       // only search in the first 25 MB that's where all the code is thanks to Denuvo the exe is unnecessarily large
-       std::size_t sectionSize = min(ntHeaders->OptionalHeader.SizeOfImage, 25U * 1024U * 1024U);
+      // only search in the first 25 MB that's where all the code is thanks to Denuvo the exe is unnecessarily large
+      std::size_t sectionSize = min(ntHeaders->OptionalHeader.SizeOfImage, 25U * 1024U * 1024U);
 
-       //movss xmm2, [rcx+2CCh], jnz 5, mov xmm2, ... only occurs where we need it in every version released on steam so far
-       std::vector<std::byte> pattern = { std::byte{0xf3}, std::byte{0x0f}, std::byte{0x10}, std::byte{0x91},
-                                            std::byte{0xcc}, std::byte{0x02}, std::byte{0x00}, std::byte{0x00},
-                                            std::byte{0x75}, std::byte{0x0a}, std::byte{0xf3}, std::byte{0x0f},
-                                            std::byte{0x10}, std::byte{0x15} };
-       std::vector<std::byte*> patternAddr = System::ScanMemoryForPattern((std::byte*)baseAddr, sectionSize, pattern);
+      // movss xmm2, [rcx+2CCh], jnz 5, mov xmm2, ... only occurs where we need it in every version released on steam so far
+      std::vector<std::byte> pattern = {std::byte{0xf3}, std::byte{0x0f}, std::byte{0x10}, std::byte{0x91},
+         std::byte{0xcc}, std::byte{0x02}, std::byte{0x00}, std::byte{0x00},
+         std::byte{0x75}, std::byte{0x0a}, std::byte{0xf3}, std::byte{0x0f},
+         std::byte{0x10}, std::byte{0x15}};
+      std::vector<std::byte*> patternAddr = System::ScanMemoryForPattern((std::byte*)baseAddr, sectionSize, pattern);
 
-       if (patternAddr.empty())
-       {
-           return false;
-       }
+      if (patternAddr.empty())
+      {
+         return false;
+      }
 
-       uintptr_t patchAddr = reinterpret_cast<uintptr_t>(patternAddr[0]);
+      uintptr_t patchAddr = reinterpret_cast<uintptr_t>(patternAddr[0]);
 
-       uint32_t mipBiasOffset;
-       memcpy(&mipBiasOffset, (void*)(patchAddr + 14), sizeof(mipBiasOffset));
-       uintptr_t mipBiasAddr = patchAddr + 18 + mipBiasOffset;
+      uint32_t mipBiasOffset;
+      memcpy(&mipBiasOffset, (void*)(patchAddr + 14), sizeof(mipBiasOffset));
+      uintptr_t mipBiasAddr = patchAddr + 18 + mipBiasOffset;
 
-       uint8_t earlyOutOffset;
-       memcpy(&earlyOutOffset, (void*)(patchAddr + 9), sizeof(earlyOutOffset));
-       uintptr_t earlyOutAddr = patchAddr + 10 + earlyOutOffset;
+      uint8_t earlyOutOffset;
+      memcpy(&earlyOutOffset, (void*)(patchAddr + 9), sizeof(earlyOutOffset));
+      uintptr_t earlyOutAddr = patchAddr + 10 + earlyOutOffset;
 
-       uint8_t returnOffset;
-       memcpy(&returnOffset, (void*)(patchAddr + 19), sizeof(returnOffset));
-       uintptr_t returnAddr = patchAddr + 20 + returnOffset;
+      uint8_t returnOffset;
+      memcpy(&returnOffset, (void*)(patchAddr + 19), sizeof(returnOffset));
+      uintptr_t returnAddr = patchAddr + 20 + returnOffset;
 
-       // when the resolution dependent mip bias is zero we add FLT_MIN so we can detect it and not
-       // upgrade the sampler state
-       std::vector<uint8_t> shellcode = {
-          0xf3, 0x0f, 0x10, 0x91, 0xcc, 0x02, 0x00, 0x00,                // movss xmm2, dword ptr [rcx+2CCh]
-          0x75, 0x30,                                                    // jne early out
-          0x48, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,    // mov rax, [mip bias addr]
-          0xf3, 0x0f, 0x10, 0x10,                                        // movss xmm2, rax
-          0x0f, 0x57, 0xc9,                                              // xorps xmm1, xmm1
-          0x0f, 0x2e, 0xd1,                                              // ucomiss xmm2, xmm1
-          0x75, 0x0D,                                                    // jne return
-          0xb8, 0x00, 0x00, 0x80, 0x00,                                  // mov eax, 0x800000
-          0x66, 0x0f, 0x6e, 0xc8,                                        // movd xmm1, eax
-          0xf3, 0x0f, 0x58, 0xd1,                                        // addss xmm2, xmm1
-          0x49, 0xba, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,    // return: mov r10, [return address 1]
-          0x41, 0xff, 0xe2,                                              // jmp r10
-          0x49, 0xba, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,    // early out: mov r10, [return address 2]
-          0x41, 0xff, 0xe2                                               // jmp r10
-       };
+      // when the resolution dependent mip bias is zero we add FLT_MIN so we can detect it and not
+      // upgrade the sampler state
+      std::vector<uint8_t> shellcode = {
+         0xf3, 0x0f, 0x10, 0x91, 0xcc, 0x02, 0x00, 0x00,             // movss xmm2, dword ptr [rcx+2CCh]
+         0x75, 0x30,                                                 // jne early out
+         0x48, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, [mip bias addr]
+         0xf3, 0x0f, 0x10, 0x10,                                     // movss xmm2, rax
+         0x0f, 0x57, 0xc9,                                           // xorps xmm1, xmm1
+         0x0f, 0x2e, 0xd1,                                           // ucomiss xmm2, xmm1
+         0x75, 0x0D,                                                 // jne return
+         0xb8, 0x00, 0x00, 0x80, 0x00,                               // mov eax, 0x800000
+         0x66, 0x0f, 0x6e, 0xc8,                                     // movd xmm1, eax
+         0xf3, 0x0f, 0x58, 0xd1,                                     // addss xmm2, xmm1
+         0x49, 0xba, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return: mov r10, [return address 1]
+         0x41, 0xff, 0xe2,                                           // jmp r10
+         0x49, 0xba, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // early out: mov r10, [return address 2]
+         0x41, 0xff, 0xe2                                            // jmp r10
+      };
 
-       size_t allocSize = shellcode.size() + 16; // Add 16 for extra safety
-       jump_memory = (uint8_t*)VirtualAlloc(nullptr, allocSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-       if (!jump_memory)
-           return false;
+      size_t allocSize = shellcode.size() + 16; // Add 16 for extra safety
+      jump_memory = (uint8_t*)VirtualAlloc(nullptr, allocSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+      if (!jump_memory)
+         return false;
 
-       uintptr_t codeAddr = (uintptr_t)jump_memory;
+      uintptr_t codeAddr = (uintptr_t)jump_memory;
 
-       memcpy(&shellcode[12], &mipBiasAddr, sizeof(void*));
-       memcpy(&shellcode[47], &returnAddr, sizeof(void*));
-       memcpy(&shellcode[60], &earlyOutAddr, sizeof(void*));
-       memcpy((void*)codeAddr, shellcode.data(), shellcode.size());
+      memcpy(&shellcode[12], &mipBiasAddr, sizeof(void*));
+      memcpy(&shellcode[47], &returnAddr, sizeof(void*));
+      memcpy(&shellcode[60], &earlyOutAddr, sizeof(void*));
+      memcpy((void*)codeAddr, shellcode.data(), shellcode.size());
 
-       FlushInstructionCache(GetCurrentProcess(), (void*)codeAddr, shellcode.size());
+      FlushInstructionCache(GetCurrentProcess(), (void*)codeAddr, shellcode.size());
 
-       DWORD oldProtect;
-       BOOL success = VirtualProtect((void*)patchAddr, stolenLen, PAGE_EXECUTE_READWRITE, &oldProtect);
-       if (success)
-       {
-           // Build jump to shellcode
-           uint8_t jmpToShellcode[13] = { 0x49, 0xba, 0, 0, 0, 0, 0, 0, 0, 0, 0x41, 0xff, 0xe2 }; // mov r10, [addr]; jmp r10
-           memcpy(&jmpToShellcode[2], &codeAddr, sizeof(void*));
+      DWORD oldProtect;
+      BOOL success = VirtualProtect((void*)patchAddr, stolenLen, PAGE_EXECUTE_READWRITE, &oldProtect);
+      if (success)
+      {
+         // Build jump to shellcode
+         uint8_t jmpToShellcode[13] = {0x49, 0xba, 0, 0, 0, 0, 0, 0, 0, 0, 0x41, 0xff, 0xe2}; // mov r10, [addr]; jmp r10
+         memcpy(&jmpToShellcode[2], &codeAddr, sizeof(void*));
 
-           memset((void*)patchAddr, 0x90, stolenLen);    // NOP original bytes
-           memcpy((void*)patchAddr, jmpToShellcode, 13); // Write the jump
+         memset((void*)patchAddr, 0x90, stolenLen);    // NOP original bytes
+         memcpy((void*)patchAddr, jmpToShellcode, 13); // Write the jump
 
-           VirtualProtect((void*)patchAddr, stolenLen, oldProtect, &oldProtect);
+         VirtualProtect((void*)patchAddr, stolenLen, oldProtect, &oldProtect);
 
-           FlushInstructionCache(GetCurrentProcess(), (void*)patchAddr, stolenLen);
+         FlushInstructionCache(GetCurrentProcess(), (void*)patchAddr, stolenLen);
 
-           return true;
-       }
+         return true;
+      }
 
-       if (jump_memory)
-           VirtualFree(jump_memory, 0, MEM_RELEASE);
+      if (jump_memory)
+         VirtualFree(jump_memory, 0, MEM_RELEASE);
 
-       return false;
+      return false;
    }
 } // namespace
 
