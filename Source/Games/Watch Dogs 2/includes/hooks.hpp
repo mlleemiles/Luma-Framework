@@ -188,6 +188,7 @@ enum AAOptions {
 };
 
 inline SafetyHookInline g_deferred_fx_antialias_renderer_hook;
+inline SafetyHookInline g_net_hacking_renderer_hook;
 
 extern uintptr_t* AAOptionBase;
 extern uintptr_t CDeferredFxAntialiasRenderer;
@@ -199,6 +200,8 @@ extern CDeferredFxRendererContextTextures m_deferredFXRendererContextTextures;
 extern CTexture* m_currDeferredFXAntialiasFrameTexture;
 extern uintptr_t JitterTableOffset;
 
+extern uintptr_t CNetHackingRenderer;
+
 AAOptions GetAAOption();
 //float GetGameDeltaTime();
 //void GetViewportSize();
@@ -207,3 +210,4 @@ using fnGetExistingSharedTexture = __int64(__fastcall*)(__int64 a1, unsigned int
 extern fnGetExistingSharedTexture GetExistingSharedTexture;
 
 __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintptr_t* a2);
+__int64 __fastcall Hooked_CNetHackingRendererPrepare(__int64 a1, __int64 a2, __int64 a3, __int64 a4, __int64 a5, __int64 a6, __int64 a7, __int64 a8);

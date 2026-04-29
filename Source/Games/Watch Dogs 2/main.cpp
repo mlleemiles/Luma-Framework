@@ -12,6 +12,19 @@
 #include "includes\hooks.hpp"
 #include "includes\safetyhook.hpp"
 #include "includes\hooks.cpp"
+#include "includes\stretchy_buffer.hpp"
+
+struct PreviousSkinCache
+{
+   uint offset;
+   uint stride;
+};
+
+struct SkinCacheEntry
+{
+   uint32_t offset;
+   uint32_t stride;
+};
 
 namespace
 {
@@ -171,6 +184,7 @@ namespace
    ShaderHashesList shader_hashes_TemporalAA;
    ShaderHashesList shader_hashes_WaterGridVectorMap;
    ShaderHashesList shader_hashes_Materials;
+   ShaderHashesList shader_hashes_ClothPreTransformed;
    
    std::shared_mutex materials_mutex;
    bool has_set_luma_cb_material = false;
@@ -197,6 +211,12 @@ struct GameDeviceDataWatchDogs2 final : public GameDeviceData
    ComPtr<ID3D11CommandList> partial_command_list;
 
    ComPtr<ID3D11Buffer> modifiable_index_vertex_buffer;
+   
+   ComPtr<ID3D11Buffer> cbuffer_skin_cache;
+   std::unique_ptr<StretchyBuffer> prev_skin_buffer;
+   std::unique_ptr<StretchyBuffer> skin_buffer;
+   std::unordered_map<ID3D11Buffer*, SkinCacheEntry> prev_skin_lookup;
+   std::unordered_map<ID3D11Buffer*, SkinCacheEntry> skin_lookup;
    
    std::mutex game_device_data_mutex;
 
@@ -318,6 +338,48 @@ public:
          }
       }
       
+      pattern = {
+         0x4C, 0x89, 0x4C, 0x24, WILDCARD,
+         0x4C, 0x89, 0x44, 0x24, WILDCARD,
+         0x55,
+         0x53,
+         0x56,
+         0x57,
+         0x41, 0x54,
+         0x41, 0x55,
+         0x41, 0x56,
+         0x41, 0x57,
+         0x48, 0x8D, 0x6C, 0x24, WILDCARD,
+         0x48, 0x81, 0xEC, WILDCARD, WILDCARD, WILDCARD, WILDCARD,
+         0x48, 0x8B, 0xB5,
+      };
+      
+      
+      results = System::ScanMemoryForPattern(
+         reinterpret_cast<std::byte*>(engine_module),
+         section_size,
+         pattern
+         );
+
+      if (!results.empty() && !g_net_hacking_renderer_hook)
+      {
+         void* fn = reinterpret_cast<void*>(results[0]);
+
+         g_net_hacking_renderer_hook = safetyhook::create_inline(
+            fn,
+            Hooked_CNetHackingRendererPrepare
+            );
+
+         if (g_net_hacking_renderer_hook)
+         {
+            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
+         }
+         else
+         {
+            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
+         }
+      }
+      
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
@@ -340,6 +402,28 @@ public:
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
       device_data.game = new GameDeviceDataWatchDogs2;
+   }
+   
+   void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+
+      {
+         D3D11_BUFFER_DESC bd;
+         bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+         bd.ByteWidth = 16;
+         bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+         bd.MiscFlags = 0;
+         bd.StructureByteStride = 0;
+         bd.Usage = D3D11_USAGE_DYNAMIC;
+         native_device->CreateBuffer(&bd, nullptr, game_device_data.cbuffer_skin_cache.put());
+      }
+
+      com_ptr<ID3D11DeviceContext> context;
+      native_device->GetImmediateContext(&context);
+      // 32MB is untested
+      game_device_data.skin_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32 * 1024 * 1024);
+      game_device_data.prev_skin_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32 * 1024 * 1024);
    }
    
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
@@ -612,19 +696,70 @@ public:
    
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
-      const std::shared_lock lock(materials_mutex);
-      if (original_shader_hashes.Contains(shader_hashes_Materials))
+      auto& game_device_data = GetGameDeviceData(device_data);
+      
+      if (original_shader_hashes.Contains(shader_hashes_ClothPreTransformed))
       {
-         if (motion_vector_contexts.find(native_device_context) != motion_vector_contexts.end())
+         if (!motion_vector_contexts.contains(native_device_context))
          {
             SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
             motion_vector_contexts.emplace(native_device_context);
          }
+         
+         reshade::log::message(reshade::log::level::info, "Cloth Pre-Transformed Drawing.");
+            
+         ID3D11ShaderResourceView* srv = game_device_data.prev_skin_buffer->srv.get();
+         native_device_context->VSSetConstantBuffers(9, 1, &game_device_data.cbuffer_skin_cache);
+         native_device_context->VSSetShaderResources(1, 1, &srv);
+            
+         ComPtr<ID3D11Buffer> vertex_buffer;
+         uint32_t stride;
+         uint32_t offset;
+         // positions are stored buffer 1 instead of 0
+         native_device_context->IAGetVertexBuffers(1, 1, vertex_buffer.put(), &stride, &offset);
+
+         D3D11_BUFFER_DESC bd;
+         vertex_buffer->GetDesc(&bd);
+            
+         if (game_device_data.skin_lookup.find(vertex_buffer.get()) == game_device_data.skin_lookup.cend())
+         {
+            SkinCacheEntry cache_entry = {};
+            cache_entry.offset = game_device_data.skin_buffer->size + offset;
+            cache_entry.stride = stride;
+
+            game_device_data.skin_buffer->CopyFromBuffer(native_device_context, vertex_buffer.get(), bd.ByteWidth);
+
+            game_device_data.skin_lookup[vertex_buffer.get()] = cache_entry;
+         }
+            
+         bool previous_skin_set = false;
+            
+         auto cache_it = game_device_data.prev_skin_lookup.find(vertex_buffer.get());
+            
+         if (cache_it != game_device_data.prev_skin_lookup.cend())
+         {
+            D3D11_MAPPED_SUBRESOURCE mapped_cbuffer;
+            native_device_context->Map(game_device_data.cbuffer_skin_cache.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_cbuffer);
+            PreviousSkinCache* vs_consts_skin = (PreviousSkinCache*)mapped_cbuffer.pData;
+            vs_consts_skin->offset = cache_it->second.offset;
+            vs_consts_skin->stride = cache_it->second.stride;
+            native_device_context->Unmap(game_device_data.cbuffer_skin_cache.get(), 0);
+
+            previous_skin_set = true;
+         }
          //has_set_luma_cb_material = false;
          return DrawOrDispatchOverrideType::None;
       }
-
-      auto& game_device_data = GetGameDeviceData(device_data);
+      
+      const std::shared_lock lock(materials_mutex);
+      if (original_shader_hashes.Contains(shader_hashes_Materials))
+      {
+         if (!motion_vector_contexts.contains(native_device_context))
+         {
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
+            motion_vector_contexts.emplace(native_device_context);
+         }
+      }
       
       if (original_shader_hashes.Contains(shader_hashes_WaterGridVectorMap))
       {
@@ -671,7 +806,6 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
    
-
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
    {
       ID3D11DeviceChild* primary_child = reinterpret_cast<ID3D11DeviceChild*>(cmd_list->get_native());
@@ -871,6 +1005,8 @@ public:
                   }
                }
                
+               skip_dlss = skip_dlss || CNetHackingRenderer;
+               
                if (!skip_dlss)
                {
 #if DEBUG_LOG
@@ -956,13 +1092,14 @@ public:
    
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
    {
+      
       auto& game_device_data = GetGameDeviceData(device_data);
       
       if (CDeferredFxAntialiasRenderer)
       {
          game_device_data.render_resolution.x = (float)m_viewportPrivateData->m_viewportSize[0];
          game_device_data.render_resolution.y = (float)m_viewportPrivateData->m_viewportSize[1];
-         //if (device_data.sr_type != SR::Type::None)
+         if (device_data.sr_type != SR::Type::None)
          {
             JitterUpdate();
          }
@@ -993,6 +1130,7 @@ public:
          game_device_data.viewport_cbv.reset();
          
          CDeferredFxAntialiasRenderer = 0;
+         CNetHackingRenderer = 0;
          m_deferredFXRendererContext = nullptr;
          m_viewportPrivateData = nullptr;
          m_viewportParamProvider = nullptr;
@@ -1008,6 +1146,11 @@ public:
          m_deferredFXRendererContextTextures.m_fullAOTexture = nullptr;
          
          motion_vector_contexts.clear();
+         
+         std::swap(game_device_data.prev_skin_lookup, game_device_data.skin_lookup);
+         game_device_data.skin_lookup.clear();
+         std::swap(game_device_data.prev_skin_buffer, game_device_data.skin_buffer);
+         game_device_data.skin_buffer->Reset();
       }
 
       device_data.has_drawn_sr = false;
@@ -1024,7 +1167,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       Globals::SetGlobals(PROJECT_NAME, "Watch Dogs 2 Luma mod");
-      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
+      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::Playable;
       Globals::VERSION = 1;
 
       luma_settings_cbuffer_index = 12; // 13 is used
@@ -1058,6 +1201,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       };
       shader_hashes_WaterGridVectorMap.pixel_shaders = {
          0xC8873B8F,
+      };
+      shader_hashes_ClothPreTransformed.vertex_shaders = {
+         0xD298ACCF,
       };
 
 #if DEVELOPMENT

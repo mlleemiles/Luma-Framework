@@ -11,6 +11,8 @@ CDeferredFxAntialiasRendererS* m_deferredFxAntialiasRenderer = nullptr;
 CTexture* m_currDeferredFXAntialiasFrameTexture = nullptr;
 uintptr_t JitterTableOffset = 0;
 
+uintptr_t CNetHackingRenderer = 0;
+
 fnGetExistingSharedTexture GetExistingSharedTexture = nullptr;
 
 AAOptions GetAAOption()
@@ -55,6 +57,19 @@ __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintpt
    if (a1)
    {
       m_currDeferredFXAntialiasFrameTexture = m_deferredFxAntialiasRenderer->m_currDeferredFXAntialiasFrameTexture;
+   }
+   
+   return original_result;
+}
+
+__int64 __fastcall Hooked_CNetHackingRendererPrepare(__int64 a1, __int64 a2, __int64 a3, __int64 a4, __int64 a5, __int64 a6, __int64 a7, __int64 a8)
+{
+   auto original_result = g_net_hacking_renderer_hook
+       .unsafe_call<__int64>(a1, a2, a3, a4, a5, a6, a7, a8);
+   
+   if (a1)
+   {
+      CNetHackingRenderer = a1;
    }
    
    return original_result;
