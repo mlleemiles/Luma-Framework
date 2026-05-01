@@ -38,7 +38,6 @@ struct GFD_VSCONST_VIEWPROJ
 namespace
 {
    uint32_t g_shadow_map_size_override = 0;
-   bool g_allow_upscale = true;
 
    float2 projection_jitters = {0, 0};
    ShaderHashesList shader_hashes_light;
@@ -239,7 +238,6 @@ public:
    {
       reshade::api::effect_runtime* runtime = nullptr;
       reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override);
-      reshade::get_config_value(runtime, NAME, "EnableUpscaling", g_allow_upscale);
    }
 
    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
@@ -287,8 +285,7 @@ public:
       uint32_t output_width;
       uint32_t output_height;
 
-      if (g_allow_upscale &&
-          device_data.output_resolution.x > width &&
+      if (device_data.output_resolution.x > width &&
           device_data.output_resolution.y > height)
       {
          output_width = device_data.output_resolution.x;
@@ -607,10 +604,10 @@ public:
       }
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      auto CheckAndHandleRenderPassTransition = [native_device_context, &cmd_list_data, &device_data, &game_device_data](ID3D11RenderTargetView** render_target_views, ID3D11DepthStencilView* depth_stencil_view)
+      auto CheckAndHandleRenderPassTransition = [native_device_context, &cmd_list_data, &device_data, &game_device_data](ID3D11RenderTargetView* render_target_view_1, ID3D11DepthStencilView* depth_stencil_view)
       {
          com_ptr<ID3D11Resource> resource;
-         render_target_views[1]->GetResource(&resource);
+         render_target_view_1->GetResource(&resource);
          if (!resource)
          {
             return DrawOrDispatchOverrideType::None;
@@ -640,7 +637,7 @@ public:
                depth_stencil_view->GetResource(&game_device_data.depth_texture);
 
                com_ptr<ID3D11Resource> renderTargetResource;
-               render_target_views[1]->GetResource(&renderTargetResource);
+               render_target_view_1->GetResource(&renderTargetResource);
 
                renderTargetResource->QueryInterface(&game_device_data.motion_vectors);
 
@@ -715,7 +712,7 @@ public:
          if (render_target_views[0] &&
              render_target_views[1])
          {
-            return CheckAndHandleRenderPassTransition(&render_target_views[0], depth_stencil_view.get());
+            return CheckAndHandleRenderPassTransition(render_target_views[1].get(), depth_stencil_view.get());
          }
 
          com_ptr<ID3D11Resource> depth_stencil_resource;
@@ -777,7 +774,7 @@ public:
             return DrawOrDispatchOverrideType::None;
          }
 
-         return CheckAndHandleRenderPassTransition(&render_target_views[0], depth_stencil_view.get());
+         return CheckAndHandleRenderPassTransition(render_target_views[1].get(), depth_stencil_view.get());
       }
       else if (original_shader_hashes.Contains(shader_hashes_light))
       {
@@ -905,7 +902,7 @@ public:
              original_shader_hashes.Contains(shader_hashes_smaa_blending)))
       {
          com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 4, &srv);
+         native_device_context->PSGetShaderResources(0, 1, &srv);
          com_ptr<ID3D11RenderTargetView> rtv;
          native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
 
@@ -1240,10 +1237,6 @@ public:
 
       ImGui::NewLine();
 
-      if (ImGui::Checkbox("Enable SR Upscaling", &g_allow_upscale))
-      {
-         reshade::set_config_value(runtime, NAME, "EnableUpscaling", g_allow_upscale);
-      }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("When enabled setting Rendering Scale to 50%% or 75%% will use Super Resolution (DLSS or FSR) to scale the image to the output resolution.\nOtherwise Super Resolution will only be used as AA and the image is bilinearly upscaled.");

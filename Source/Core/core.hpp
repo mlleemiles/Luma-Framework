@@ -2639,7 +2639,11 @@ namespace
          }
          ASSERT_ONCE((desc.present_flags & DXGI_SWAP_CHAIN_FLAG_FULLSCREEN_VIDEO) == 0); // Uh?
 
-         desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // Games will still need to call "Present()" with "DXGI_PRESENT_ALLOW_TEARING" for this to do anything (ReShade will automatically do it if this flag is set)
+         if (desc.present_mode == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || desc.present_mode == DXGI_SWAP_EFFECT_FLIP_DISCARD) // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING requires flip model
+         {
+             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // Games will still need to call "Present()" with "DXGI_PRESENT_ALLOW_TEARING" for this to do anything (ReShade will automatically do it if this flag is set)
+         }
+
          if (prevent_fullscreen_state) // Not sure this helps but it doesn't seem to hurt
          {
             desc.present_flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
