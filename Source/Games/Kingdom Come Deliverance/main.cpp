@@ -13,6 +13,29 @@ namespace
     const ShaderHashesList shader_hashes_Lightning = { .compute_shaders = { 0x0181192D } };
     float g_jitter_x;
     float g_jitter_y;
+    bool g_has_drawn_lightning;
+
+    bool is_jitter(float x)
+    {
+        // Base jitters (x, y) in range [-0.5, 0.5], for "r_AntialiasingTAAPattern 4" (the game setting).
+        // ( 0.0625, -0.1875), (-0.0625,  0.1875),
+        // ( 0.3125,  0.0625), (-0.1875, -0.3125),
+        // (-0.3125,  0.3125), (-0.4375, -0.0625),
+        // ( 0.1875,  0.4375), ( 0.4375, -0.4375)
+        //
+        // We only need to check for x jitters in range [-1, 1], y jitters will match.
+        static constexpr std::array x_jitters = { 0.0625f * 2.0f, 0.3125f * 2.0f, -0.3125f * 2.0f, 0.1875f * 2.0f, -0.0625f * 2.0f, -0.1875f * 2.0f, -0.4375f * 2.0f, 0.4375f * 2.0f }; 
+        
+        constexpr float eps = 1e-5f;
+        for (int i = 0; i < x_jitters.size(); ++i)
+        {
+            if (std::abs(x - x_jitters[i]) < eps)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 struct GameDeviceDataKingdomComeDeliverance final : GameDeviceData
@@ -20,6 +43,7 @@ struct GameDeviceDataKingdomComeDeliverance final : GameDeviceData
     ComPtr<ID3D11Texture2D> tex_dlss_output;
     ComPtr<ID3D11Texture2D> tex_mvs;
     ComPtr<ID3D11RenderTargetView> rtv_mvs;
+    std::unordered_map<uintptr_t, void*> mapped_cbs;
 };
 
 class KingdomComeDeliverance final : public Game
@@ -29,6 +53,15 @@ public:
     static GameDeviceDataKingdomComeDeliverance& GetGameDeviceData(DeviceData& device_data)
     {
         return *(GameDeviceDataKingdomComeDeliverance*)device_data.game;
+    }
+
+    void OnLoad(std::filesystem::path& file_path, bool failed) override
+    {
+       if (!failed)
+       {
+          reshade::register_event<reshade::addon_event::map_buffer_region>(KingdomComeDeliverance::OnMapBufferRegion);
+          reshade::register_event<reshade::addon_event::unmap_buffer_region>(KingdomComeDeliverance::OnUnmapBufferRegion);
+       }
     }
 
     void OnInit(bool async) override
@@ -44,14 +77,68 @@ public:
         device_data.game = new GameDeviceDataKingdomComeDeliverance;
     }
 
+    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+    {
+        auto& device_data = *device->get_private_data<DeviceData>();
+        auto& game_device_data = GetGameDeviceData(device_data);
+
+        auto buffer = (ID3D11Buffer*)resource.handle;
+        D3D11_BUFFER_DESC desc;
+        buffer->GetDesc(&desc);
+
+        if ((desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) && desc.ByteWidth >= 256)
+        {
+           game_device_data.mapped_cbs[resource.handle] = *data;
+        }
+    }
+
+    static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+    {
+        auto& device_data = *device->get_private_data<DeviceData>();
+        auto& game_device_data = GetGameDeviceData(device_data);
+
+        if (!g_has_drawn_lightning && game_device_data.mapped_cbs.contains(resource.handle))
+        {
+           auto data = (float4*)game_device_data.mapped_cbs[resource.handle];
+
+           // The CB we are after, from Lightning_0x0181192D_CS.
+           //
+           // cbuffer PER_BATCH : register(b0)
+           // {
+           //   float4 GiSettings : packoffset(c0);
+           //   float4 TPLParams : packoffset(c1);
+           //   float4 FrustumTL : packoffset(c2);
+           //   float4 FrustumBL : packoffset(c3);
+           //   float4 WorldViewPos : packoffset(c4);
+           //   float4 PS_NearFarClipDist : packoffset(c5);
+           //   float4 ProjParams : packoffset(c6); // ProjMatrix._m00, ProjMatrix._m11, ProjMatrix._m20, ProjMatrix._m21
+           //   float4 ForwGiIntegrationMode : packoffset(c7);
+           //   float4 SunDir : packoffset(c8);
+           //   float4 PS_ScreenSize : packoffset(c9);
+           //   float4 SSDOParams : packoffset(c10);
+           //   float4 FrustumTR : packoffset(c11);
+           //   float4 ScreenSize : packoffset(c12); // w, h, 1/w, 1/h
+           //   float4 g_vVisAreasParams[64] : packoffset(c13);
+           // }
+           //
+
+           if (is_jitter(data[6].z * device_data.render_resolution.x))
+           {
+              g_jitter_x = data[6].z;
+              g_jitter_y = data[6].w;
+           }
+           game_device_data.mapped_cbs.erase(resource.handle);
+        }
+    }
+
     DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
 
         if (original_shader_hashes.Contains(shader_hashes_Lightning))
         {
-            // FIXME: Find this buffer on update and remove this.
-            #if 1
+            // TODO: Remove this after we are sure that we can reliably catch this CB on Map/Unmap.
+            #if 0
             if (device_data.sr_type != SR::Type::None)
             {
                 // Get CB0 and its description.
@@ -99,6 +186,7 @@ public:
             }
             #endif
 
+            g_has_drawn_lightning = true;
             return DrawOrDispatchOverrideType::None;
         }
 
@@ -213,6 +301,8 @@ public:
     void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
+
+        g_has_drawn_lightning = false;
 
         if (!custom_texture_mip_lod_bias_offset)
         {

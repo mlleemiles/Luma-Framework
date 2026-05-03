@@ -15,6 +15,8 @@ void main(
   o0.xyz = r0.xyz * r0.www;
   o0.w = r0.w;
 
+  o0 = saturate(o0);
+
   //o0.xyz = linear_to_gamma(o0.xyz);
   //o0 = saturate(o0); // Clamp
 }

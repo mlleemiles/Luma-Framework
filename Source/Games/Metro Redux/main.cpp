@@ -240,6 +240,7 @@ public:
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1'); // Gamma correction looks correct. TODO: Experiment with different LUT sampling options instead.
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0'); // TODO: Figure out what went wrong with encoding and then implement UI_DRAW_TYPE 2
       GetShaderDefineData(GAMUT_MAPPING_TYPE_HASH).SetDefaultValue('1'); // Contains out of gamut colors, pushing into invalid territory
+      GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1'); // The game just clipped, so HDR is an extension of SDR (except for some shaders that we adjust)
 
       // ### Update these (find the right values) ###
       // ### See the "GameCBuffers.hlsl" in the shader directory to expand settings ###
@@ -298,21 +299,27 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
       texture_upgrade_formats = {
-         // reshade::api::format::r8g8b8a8_unorm,
-         reshade::api::format::r8g8b8a8_unorm_srgb,
-         // reshade::api::format::r8g8b8a8_typeless,
-         // reshade::api::format::r8g8b8x8_unorm,
-        //  reshade::api::format::r8g8b8x8_unorm_srgb,
-         /*reshade::api::format::b8g8r8a8_unorm,
-         reshade::api::format::b8g8r8a8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_typeless,
-         reshade::api::format::b8g8r8x8_unorm,
-         reshade::api::format::b8g8r8x8_unorm_srgb,
-         reshade::api::format::b8g8r8x8_typeless,
+      //    // reshade::api::format::r8g8b8a8_unorm,
+          //reshade::api::format::r8g8b8a8_unorm_srgb,
+      //    // reshade::api::format::r8g8b8a8_typeless,
+      //    // reshade::api::format::r8g8b8x8_unorm,
+      //   //  reshade::api::format::r8g8b8x8_unorm_srgb,
+      //    /*reshade::api::format::b8g8r8a8_unorm,
+      //    reshade::api::format::b8g8r8a8_unorm_srgb,
+      //    reshade::api::format::b8g8r8a8_typeless,
+      //    reshade::api::format::b8g8r8x8_unorm,
+      //    reshade::api::format::b8g8r8x8_unorm_srgb,
+      //    reshade::api::format::b8g8r8x8_typeless,
 
-         reshade::api::format::r11g11b10_float,*/
+      //    reshade::api::format::r11g11b10_float,*/
       };
+      
+         auto_texture_format_upgrade_shader_hashes[std::stoul("5C867D7E", nullptr, 16)] = { {0}, {} }; // Tonemap
+         auto_texture_format_upgrade_shader_hashes[std::stoul("F398A1ED", nullptr, 16)] = { {0}, {} }; // Tonemap
+         auto_texture_format_upgrade_shader_hashes[std::stoul("A453ADB1", nullptr, 16)] = { {0}, {} }; // Tonemap
+         auto_texture_format_upgrade_shader_hashes[std::stoul("FA7FE535", nullptr, 16)] = { {0}, {} }; // Tonemap
       // ### Check these if textures are not upgraded ###
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 

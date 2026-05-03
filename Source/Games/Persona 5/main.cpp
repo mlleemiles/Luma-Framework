@@ -44,6 +44,7 @@ namespace
    ShaderHashesList shader_hashes_bloom_select;
    ShaderHashesList shader_hashes_bloom_filter;
    ShaderHashesList shader_hashes_copy;
+   ShaderHashesList shader_hashes_blur;
    ShaderHashesList shader_hashes_fxaa;
    ShaderHashesList shader_hashes_smaa_edge_detection;
    ShaderHashesList shader_hashes_smaa_weight_calculation;
@@ -922,6 +923,29 @@ public:
       {
          return DrawOrDispatchOverrideType::Skip;
       }
+      else if (original_shader_hashes.Contains(shader_hashes_blur))
+      {
+         // the game has different stages that it combines for the blur effect when running
+         // this is a step that sometimes replaces the content of render target and
+         // sometimes is alpha blended
+         // in the school hallway it is blended on a version of the scene texture that hasn't
+         // been color graded yet leading to the scene noticably shifting color
+         // as far as I can tell the render target and source texture have basiscally the same
+         // content whenever this is used so copying it over before fixes the hallway and should
+         // be safe for everything else
+         com_ptr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, &srv);
+         com_ptr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+
+         com_ptr<ID3D11Resource> srv_resource;
+         srv->GetResource(&srv_resource);
+
+         com_ptr<ID3D11Resource> rtv_resource;
+         rtv->GetResource(&rtv_resource);
+
+         native_device_context->CopySubresourceRegion(rtv_resource.get(), 0, 0, 0, 0, srv_resource.get(), 0, nullptr);
+      }
 
       return DrawOrDispatchOverrideType::None;
    }
@@ -1317,6 +1341,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_bloom_filter.pixel_shaders.emplace(std::stoul("526CA67C", nullptr, 16));
 
       shader_hashes_copy.pixel_shaders.emplace(std::stoul("B6E26AC7", nullptr, 16));
+
+      shader_hashes_blur.pixel_shaders.emplace(std::stoul("1601D274", nullptr, 16));
 
       shader_hashes_fxaa.pixel_shaders.emplace(std::stoul("9EE7A272", nullptr, 16));
 

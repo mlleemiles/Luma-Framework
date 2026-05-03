@@ -21,10 +21,11 @@ void main(
   // r0.xyz = outside ? 0.0 : r0.yzw; // Draw black bars
 
   r0.xyz = outside ? 0.0 : YUVtoRGB(r1.z, r1.x, r1.y, 1) * r1.w;
+  r0.xyz = saturate(r0.xyz);
   if (LumaSettings.GameSettings.custom_hdr_videos > 0)
   {
     float peak = LumaSettings.GameSettings.custom_hdr_videos == 1 ? min(PeakWhiteNits, sRGB_WhiteLevelNits * 2.f) : PeakWhiteNits;
-    r0.xyz = gamma_sRGB_to_linear(r0.xyz, GCT_MIRROR);
+    r0.xyz = gamma_sRGB_to_linear(r0.xyz);
     r0.xyz = PumboAutoHDR(r0.xyz, peak, GamePaperWhiteNits);
     r0.xyz = linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR);
   }

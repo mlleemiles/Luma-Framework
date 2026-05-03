@@ -13,8 +13,7 @@
 
 enum class FramePhase
 {
-   SHADOW_MAP, // TODO: find out if there are planar reflections
-   GBUFFER,
+   OPAQUE_RENDERING,
    PARTICLES,
    POSTPROCESSING_AND_UI
 };
@@ -104,6 +103,8 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    // resources used to identify the deferred context used for scene drawing
    com_ptr<ID3D11CommandList> remainder_command_list;
    std::atomic<ID3D11DeviceContext*> draw_device_context = nullptr;
+   std::set<ID3D11DeviceContext*> draw_device_context_candidates;
+   std::mutex draw_device_context_mutex;
 
    // textures we got from the game
    com_ptr<ID3D11Texture2D> source_color;
@@ -176,7 +177,7 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    std::unordered_map<ID3D11Buffer*, SkinCacheEntry> prev_skin_lookup;
    std::unordered_map<ID3D11Buffer*, SkinCacheEntry> skin_lookup;
 #endif // ENABLE_SR
-   FramePhase frame_phase = FramePhase::SHADOW_MAP;
+   FramePhase frame_phase = FramePhase::OPAQUE_RENDERING;
 
    std::unordered_map<uint32_t, std::array<uint32_t, 2>> vertex_shader_ndc_coord_indices;
    std::unordered_map<uint32_t, com_ptr<ID3D11VertexShader>> original_vertex_shaders;
@@ -498,14 +499,10 @@ public:
       }
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (native_device_context != game_device_data.draw_device_context)
-      {
-         return DrawOrDispatchOverrideType::None;
-      }
-
       DrawOrDispatchOverrideType overrideType = DrawOrDispatchOverrideType::None;
-      if (game_device_data.frame_phase == FramePhase::SHADOW_MAP)
+      if (game_device_data.draw_device_context == nullptr)
       {
+         std::unique_lock lock(game_device_data.draw_device_context_mutex);
          com_ptr<ID3D11DepthStencilView> depth_stencil_view;
          com_ptr<ID3D11RenderTargetView> render_target_views[4];
          native_device_context->OMGetRenderTargets(4, &render_target_views[0], &depth_stencil_view);
@@ -520,7 +517,7 @@ public:
              render_target_views[2] &&
              render_target_views[3])
          {
-            game_device_data.frame_phase = FramePhase::GBUFFER;
+            game_device_data.draw_device_context = native_device_context;
 
             if (SrActive(device_data))
             {
@@ -631,8 +628,17 @@ public:
                }
             }
          }
+         else
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
       }
-      if (game_device_data.frame_phase == FramePhase::GBUFFER)
+      else if (native_device_context != game_device_data.draw_device_context)
+      {
+         return DrawOrDispatchOverrideType::None;
+      }
+
+      if (game_device_data.frame_phase == FramePhase::OPAQUE_RENDERING)
       {
          if (original_shader_hashes.Contains(shader_hashes_tonemap))
          {
@@ -972,7 +978,8 @@ public:
 
       if (game_device_data.draw_device_context == nullptr)
       {
-         game_device_data.draw_device_context = native_device_context.get();
+         std::unique_lock lock(game_device_data.draw_device_context_mutex);
+         game_device_data.draw_device_context_candidates.insert(native_device_context.get());
       }
 
       return false;
@@ -1155,6 +1162,7 @@ public:
          hr = device_child->QueryInterface(&native_device_context);
          if (native_device_context == game_device_data.draw_device_context)
          {
+            std::unique_lock lock(game_device_data.draw_device_context_mutex);
             game_device_data.sr_source_color = game_device_data.source_color;
             game_device_data.sr_depth_texture = game_device_data.depth_texture;
             game_device_data.sr_particle_texture = game_device_data.particle_texture;
@@ -1164,9 +1172,10 @@ public:
             game_device_data.depth_texture.reset();
             game_device_data.particle_texture.reset();
 
-            game_device_data.frame_phase = FramePhase::SHADOW_MAP;
+            game_device_data.frame_phase = FramePhase::OPAQUE_RENDERING;
 
             game_device_data.draw_device_context = nullptr;
+            game_device_data.draw_device_context_candidates.clear();
             game_device_data.cbuffer_cache.clear();
             std::swap(game_device_data.prev_transform_lookup, game_device_data.transform_lookup);
             game_device_data.transform_lookup.clear();
@@ -1224,21 +1233,10 @@ public:
       ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
       HRESULT hr = device_child->QueryInterface(&native_device_context);
 
-      if (native_device_context.get() != game_device_data.draw_device_context)
-      {
-         return false;
-      }
-
-      // early out we don't need any cbuffer values after gbuffers are finished
-      if (game_device_data.frame_phase != FramePhase::SHADOW_MAP &&
-          game_device_data.frame_phase != FramePhase::GBUFFER)
-      {
-         return false;
-      }
-
       // store values so we can find changes for the constant buffers we are interested in
-      if (game_device_data.frame_phase == FramePhase::SHADOW_MAP)
+      if (game_device_data.draw_device_context == nullptr)
       {
+         std::unique_lock lock(game_device_data.draw_device_context_mutex);
          ID3D11Buffer* buffer = (ID3D11Buffer*)dest.handle;
          D3D11_BUFFER_DESC bd;
          ((ID3D11Buffer*)dest.handle)->GetDesc(&bd);
@@ -1251,6 +1249,17 @@ public:
 
          memcpy(game_device_data.cbuffer_cache[buffer].data(), data, bd.ByteWidth);
 
+         return false;
+      }
+
+      if (native_device_context.get() != game_device_data.draw_device_context)
+      {
+         return false;
+      }
+
+      // early out we don't need any cbuffer values after opaque geometry has finished
+      if (game_device_data.frame_phase != FramePhase::OPAQUE_RENDERING)
+      {
          return false;
       }
 

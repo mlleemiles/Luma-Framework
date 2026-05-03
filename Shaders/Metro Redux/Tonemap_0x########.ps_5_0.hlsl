@@ -17,6 +17,7 @@
 #include "../Includes/Reinhard.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 
+
 #define USE_VANILLA 0
 
 // CUSTOM FUNCTIONS
@@ -355,10 +356,12 @@ void main(
   r3.xyzw = t_lensdirt.Sample(s_clamp_tri_s, r1.xz).xyzw;
   r1.xyz = t_bloom_b.Sample(s_clamp_bi_s, r1.xy).xyz;
 
-  r1.xyz = FakeHDR(r1.xyz, 0.04f, 0.22f); // Boost bloom to make the HDR upgrade more coherent
-
-  r3.xyz *= LumaSettings.GameSettings.custom_lens_dirt;
-  r1.xyz *= LumaSettings.GameSettings.custom_bloom;
+  if (!ShouldForceSDR(coords)) {
+      r1.xyz = FakeHDR(r1.xyz, 0.04f, 0.22f); // Boost bloom to make the HDR upgrade more coherent
+      //r3.xyz = FakeHDR(r3.xyz, 0.04f, 0.22f); // Boost lens dirt more as well, to keep it visible in HDR, and make the upgrade more coherent
+      r3.xyz *= LumaSettings.GameSettings.custom_lens_dirt;
+      r1.xyz *= LumaSettings.GameSettings.custom_bloom;
+  }
 
   r3.xyz = r3.xyz * r3.www;
   r3.xyz = float3(5,5,5) * r3.xyz;
@@ -366,9 +369,10 @@ void main(
   r3.xyz = r3.xyz * r0.xxx + float3(1,1,1);
   r4.xyz = r3.xyz * r1.xyz;
   r0.xyz = r1.xyz * r3.xyz + r0.yzw;
-#if USE_VANILLA
-  r0.xyz = max(float3(0,0,0), r0.xyz);
-#endif
+  if (ShouldForceSDR(coords)) {
+      r0.xyz = max(float3(0, 0, 0), r0.xyz);
+  }
+
 
 #if HAS_LIGHT_SHAFTS
   float2 shafts_dir = v0.xy * rtdim.xy - sun_position.xy;
@@ -396,7 +400,7 @@ void main(
   float3 tonemapped_bt709;
   float scale = 1;
   
-#if USE_VANILLA
+  if (ShouldForceSDR(coords)) {
 // UC2 tonemap
   r1.xyz = r0.xyz * float3(0.150000006,0.150000006,0.150000006) + float3(0.0500000007,0.0500000007,0.0500000007);
   r1.xyz = r0.xyz * r1.xyz + float3(0.00400000019,0.00400000019,0.00400000019);
@@ -407,10 +411,12 @@ void main(
   r1.xyz = float3(0.125, 0.125, 0.125) * r4.xyz;
   r0.xyz = r0.xyz * float3(4.53191471, 4.53191471, 4.53191471) + r1.xyz;
   tonemapped_bt709 = r0.xyz;
-#else
+  } else {
   float3 additive_bloom = r4.xyz * 0.125f;
 
   untonemapped += additive_bloom; // change from vanilla behavior, apply bloom before tonemapping
+
+ // untonemapped = gamma_sRGB_to_linear(untonemapped, GCT_MIRROR);
 
   ColorGradeConfig config = DefaultColorGradeConfig();
   config.exposure = LumaSettings.GameSettings.exposure;
@@ -437,11 +443,10 @@ void main(
 
   //tonemapped_bt709 += additive_bloom; // Vanilla bloom application
 
-  scale = ComputeReinhardSmoothClampScale(tonemapped_bt709);
-  tonemapped_bt709 *= scale;
-  r0.xyz = tonemapped_bt709;
+  //tonemapped_bt709 = linear_to_sRGB_gamma(tonemapped_bt709, GCT_MIRROR);
 
-#endif
+  r0.xyz = tonemapped_bt709;
+  }
 
 #if HAS_GASMASK
   r1.xy = float2(-0.5,-0.5) + r2.xy;
@@ -459,7 +464,8 @@ void main(
 
 #endif
 
-#if USE_VANILLA
+  if (ShouldForceSDR(coords)) {
+  r0.xyz = tonemapped_bt709;
   r1.xyz = t_grade.Sample(s_clamp_bi_s, r0.zyx).xyz;
   r0.xyz = saturate(r0.xyz);
   r0.xyz = r1.zyx * float3(2,2,2) + r0.xyz;
@@ -467,14 +473,26 @@ void main(
 
   r0.w = dot(r0.xyz, float3(0.298999995, 0.587000012, 0.114)); // BT.601 coefficients, bad
   o0.w = sqrt(r0.w);
-#else
+  } else {
 #if 1
+      // float3 gamut_compressed_bt709 = renodx_custom::color::macleod_boynton::GamutCompressBT709(r0.xyz);
+      // float3 gamut_scale = safeDivision(gamut_compressed_bt709, r0.xyz, 1);
+      // r0.xyz *= gamut_scale;
+  //r0.xyz = gamma_sRGB_to_linear(r0.xyz, GCT_MIRROR);
+  scale = ComputeReinhardSmoothClampScale(r0.xyz);
+  r0.xyz *= scale;
+  //r0.xyz = linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR);
   r1.xyz = t_grade.Sample(s_clamp_bi_s, r0.zyx).xyz; // Also applies fade to black!
   r0.xyz = r1.zyx * float3(2, 2, 2) + r0.xyz;
   r0.xyz = float3(-1, -1, -1) + r0.xyz;
 
-  r0.xyz /= scale;
+  //r0.xyz /= scale;
+  //r0.xyz = gamma_sRGB_to_linear(r0.xyz, GCT_MIRROR);
+  r0.xyz = safeDivision(r0.xyz, scale, 2);
+  //r0.xyz = linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR);
+  //r0.xyz = safeDivision(r0.xyz, gamut_scale, 1);
 #else
+      float3 = r0.xyz;
   r1.xyz = SampleLUT(t_grade, s_clamp_bi_s, r0.zyx, 16u, true);
   r0.xyz = r1.zyx * float3(2, 2, 2) + r0.xyz;
   r0.xyz = float3(-1, -1, -1) + r0.xyz;
@@ -486,7 +504,10 @@ void main(
   #endif
   r0.w = GetLuminance(r0.xyz);
   o0.w = linear_to_gamma(r0.w).x;
-#endif
+  //o0.w = saturate(r0.w);
+  }
   o0.xyz = r0.xyz;
+
+  //o0.xyz = tonemapped_bt709;
   return;
 }

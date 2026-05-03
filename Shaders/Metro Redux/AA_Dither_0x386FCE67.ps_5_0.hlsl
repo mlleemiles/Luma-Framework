@@ -118,6 +118,12 @@ void main(
   o0.xyz += temporalDither;
   o0.xyz = pow(abs(o0.xyz), 2.2) * Sign_Fast(o0.xyz);
 #endif
+
+  if (ShouldForceSDR(uv)) {
+      o0.xyzw = saturate(o0.xyzw);
+  } else {
+
+  
   float3 untonemapped_bt2020 = BT709_To_BT2020(o0.xyz);
   untonemapped_bt2020 = gamma_sRGB_to_linear(untonemapped_bt2020, GCT_MIRROR);
 
@@ -133,5 +139,7 @@ void main(
 
   tonemapped_bt709 = linear_to_sRGB_gamma(tonemapped_bt709, GCT_MIRROR);
   o0.xyz = tonemapped_bt709;
+  o0.w = saturate(o0.w);
+  }
 
 }
