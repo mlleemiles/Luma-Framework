@@ -260,8 +260,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::None;
       texture_upgrade_formats = {
       };
-      
+#if DEVELOPMENT
       forced_shader_names.emplace(Shader::Hash_StrToNum("E48D0C69"), "SSR Raytrace");
+#endif
 
       game = new BlueReflectionSecondLight();
    }
