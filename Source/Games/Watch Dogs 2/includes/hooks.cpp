@@ -11,7 +11,7 @@ CDeferredFxAntialiasRendererS* m_deferredFxAntialiasRenderer = nullptr;
 CTexture* m_currDeferredFXAntialiasFrameTexture = nullptr;
 uintptr_t JitterTableOffset = 0;
 
-uintptr_t CNetHackingRenderer = 0;
+std::atomic<bool> bIsNetHackingRendering = false;
 
 fnGetExistingSharedTexture GetExistingSharedTexture = nullptr;
 
@@ -67,10 +67,7 @@ __int64 __fastcall Hooked_CNetHackingRendererPrepare(__int64 a1, __int64 a2, __i
    auto original_result = g_net_hacking_renderer_hook
        .unsafe_call<__int64>(a1, a2, a3, a4, a5, a6, a7, a8);
    
-   if (a1)
-   {
-      CNetHackingRenderer = a1;
-   }
+   bIsNetHackingRendering = true;
    
    return original_result;
 }
