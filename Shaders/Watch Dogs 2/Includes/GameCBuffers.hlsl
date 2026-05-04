@@ -24,6 +24,7 @@ namespace CB
 		float4x4 CameraSpaceToPreviousProjectedSpace;
         float4x4 PreviousViewRotProjectionMatrix;
         float4 PreviousCameraPosition;  // W is dummy
+		float4x4 ViewRotProjectionMatrix;
 	};
 }
 

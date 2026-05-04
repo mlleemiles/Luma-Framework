@@ -200,7 +200,7 @@ extern CDeferredFxRendererContextTextures m_deferredFXRendererContextTextures;
 extern CTexture* m_currDeferredFXAntialiasFrameTexture;
 extern uintptr_t JitterTableOffset;
 
-extern uintptr_t CNetHackingRenderer;
+extern std::atomic<bool> bIsNetHackingRendering;
 
 AAOptions GetAAOption();
 //float GetGameDeltaTime();

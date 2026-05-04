@@ -39,55 +39,6 @@ namespace
       std::byte b[4];
    };
    
-   inline bool IsWine()
-   {
-      static void* pwine_get_version;
-      HMODULE hntdll = GetModuleHandle(TEXT("ntdll.dll"));
-      if (!hntdll)
-      {
-         return false;
-      }
-
-      pwine_get_version = (void*)GetProcAddress(hntdll, "wine_get_version");
-
-      if (!pwine_get_version)
-      {
-         return false;
-      }
-
-      return true;
-   }
-
-   void PatchVMProtect()
-   {
-      DWORD oldProtect = 0;
-      auto ntdll = GetModuleHandleA("ntdll.dll");
-      if (IsWine())
-      {
-         auto nt_vp = (BYTE*)GetProcAddress(ntdll, "NtProtectVirtualMemory");
-         auto nt_vp_offset = (uintptr_t)nt_vp - (uintptr_t)ntdll + 4;
-         char nt_vp_syscall;
-
-         std::ifstream infile("C:\\Windows\\System32\\ntdll.dll", std::ios::binary);
-         infile.seekg(nt_vp_offset);
-         infile.get(nt_vp_syscall);
-
-         BYTE restore[] = {0x4C, 0x8B, 0xD1, 0xB8, static_cast<BYTE>(nt_vp_syscall)};
-         VirtualProtect(nt_vp, sizeof(restore), PAGE_EXECUTE_READWRITE, &oldProtect);
-         memcpy(nt_vp, restore, sizeof(restore));
-         VirtualProtect(nt_vp, sizeof(restore), oldProtect, &oldProtect);
-      }
-      else
-      {
-         BYTE callcode = ((BYTE*)GetProcAddress(ntdll, "NtQuerySection"))[4] - 1;
-         BYTE restore[] = {0x4C, 0x8B, 0xD1, 0xB8, callcode};
-         auto nt_vp = (BYTE*)GetProcAddress(ntdll, "NtProtectVirtualMemory");
-         VirtualProtect(nt_vp, sizeof(restore), PAGE_EXECUTE_READWRITE, &oldProtect);
-         memcpy(nt_vp, restore, sizeof(restore));
-         VirtualProtect(nt_vp, sizeof(restore), oldProtect, &oldProtect);
-      }
-   }
-   
    std::shared_mutex materials_mutex;
    
    std::unordered_set<ID3D11DeviceContext*> motion_vector_contexts;
@@ -162,6 +113,8 @@ public:
       uintptr_t camera_addr = base_addr + 0x19C18E0;
       
       CameraData = *reinterpret_cast<uintptr_t**>(base_addr + 0x19C18E0);
+      
+      RenderResolution = base_addr + 0x18C28E0;
 
       auto WILDCARD = System::BytePattern(System::BytePattern::WildcardType::Wildcard);
 
@@ -171,7 +124,7 @@ public:
          0xF3, 0x0F, 0x59, 0x0D,
          WILDCARD, WILDCARD, WILDCARD, WILDCARD,
          0x48, 0x8B, 0xD9, 0x0F, 0x29, 0x74, 0x24
-     };
+      };
 
       auto results = System::ScanMemoryForPattern(
          reinterpret_cast<std::byte*>(engine_module),
@@ -187,15 +140,31 @@ public:
             fn,
             Hooked_ComputeProjectionMatrix
             );
+      }
+      
+      pattern = {
+         0x40, 0x53, 0x48, 0x83, 0xEC,
+         WILDCARD,
+         0xF6, 0x81,
+         WILDCARD, WILDCARD, WILDCARD, WILDCARD,
+         WILDCARD,
+         0x48, 0x8B, 0xD9, 0x0F, 0x84
+      };
+      
+      results = System::ScanMemoryForPattern(
+         reinterpret_cast<std::byte*>(engine_module),
+         section_size,
+         pattern
+         );
 
-         if (g_compute_projection_matrix_hook)
-         {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
-         }
-         else
-         {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
-         }
+      if (!results.empty() && !g_camera_compute_projection_matrix_hook)
+      {
+         void* fn = reinterpret_cast<void*>(results[0]);
+
+         g_camera_compute_projection_matrix_hook = safetyhook::create_inline(
+            fn,
+            Hooked_CameraComputeProjectionMatrix
+            );
       }
       
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1'); // Game was all linear, rendering is R16G16B16A16_FLOAT and post processing + UI is R8G8B8A8_UNORM_SRGB or B8G8R8A8_UNORM_SRGB.
@@ -261,12 +230,14 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       
-      output_resolution.x = device_data.output_resolution.x;
-      output_resolution.y = device_data.output_resolution.y;
-      
       auto index = cb_luma_global_settings.FrameIndex % 8;
       projection_jitters.x = SR::HaltonSequence(index+1, 2);
       projection_jitters.y = SR::HaltonSequence(index+1, 3);
+      
+      int width  = *(int*)(RenderResolution + 0x00);
+      int height = *(int*)(RenderResolution + 0x04);
+      device_data.render_resolution.x = static_cast<float>(width);
+      device_data.render_resolution.y = static_cast<float>(height);
    }
 };
 
@@ -278,7 +249,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
       Globals::VERSION = 1;
 
-      luma_settings_cbuffer_index = 13; // 13 is used
+      luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
       
       enable_samplers_upgrade = false;
@@ -289,12 +260,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::None;
       texture_upgrade_formats = {
       };
+      
+      forced_shader_names.emplace(Shader::Hash_StrToNum("E48D0C69"), "SSR Raytrace");
 
       game = new BlueReflectionSecondLight();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
       g_compute_projection_matrix_hook.reset();
+      g_camera_compute_projection_matrix_hook.reset();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
