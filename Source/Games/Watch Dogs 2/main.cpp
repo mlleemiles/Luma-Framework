@@ -57,9 +57,9 @@ namespace
       else
       {
          jit[0].x = 0.25f;
-         jit[0].y = 0.25f;
+         jit[0].y = -0.25f;
          jit[1].x = -0.25f;
-         jit[1].y = -0.25f;
+         jit[1].y = 0.25f;
       }
       std::memcpy((void*)JitterTableOffset, &jit, sizeof(jit));
    }
@@ -154,6 +154,7 @@ namespace
    ShaderHashesList shader_hashes_ClothPreTransformed;
    ShaderHashesList shader_hashes_PostFXMask;
    ShaderHashesList shader_hashes_TemporalFiltering;
+   ShaderHashesList shader_hashes_SkyMoon;
 #if HDR_ENABLED
    ShaderHashesList shader_hashes_ColorGradingLUT;
 #endif
@@ -161,6 +162,10 @@ namespace
    std::shared_mutex materials_mutex;
    
    std::unordered_set<ID3D11DeviceContext*> motion_vector_contexts;
+   
+#if DEVELOPMENT
+   bool has_printed_dlss_skip_reason = false;
+#endif
 }
 
 struct GameDeviceDataWatchDogs2 final : public GameDeviceData
@@ -172,6 +177,7 @@ struct GameDeviceDataWatchDogs2 final : public GameDeviceData
    // textures we got from the game
    ComPtr<ID3D11Texture2D> source_color;
    ComPtr<ID3D11ShaderResourceView> source_color_srv;
+   ComPtr<ID3D11RenderTargetView> source_color_rtv;
    ComPtr<ID3D11Buffer> viewport_cbv;
    ComPtr<ID3D11ShaderResourceView> sr_output_color_srv;
    
@@ -305,14 +311,7 @@ public:
          section_size,
          pattern
          );
-#if DEBUG_LOG
-      for (auto addr : results)
-      {
-         std::stringstream s;
-         s << "Candidate: 0x" << std::hex << (uintptr_t)addr;
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
-      }
-#endif
+      
       if (!results.empty() && !g_deferred_fx_antialias_renderer_hook)
       {
          void* fn = reinterpret_cast<void*>(results[0]);
@@ -321,15 +320,6 @@ public:
             fn,
             Hooked_CDeferredFxAntialiasRendererPrepare
             );
-
-         if (g_deferred_fx_antialias_renderer_hook)
-         {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
-         }
-         else
-         {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
-         }
       }
       
       pattern = {
@@ -348,7 +338,6 @@ public:
          0x48, 0x8B, 0xB5,
       };
       
-      
       results = System::ScanMemoryForPattern(
          reinterpret_cast<std::byte*>(engine_module),
          section_size,
@@ -363,15 +352,40 @@ public:
             fn,
             Hooked_CNetHackingRendererPrepare
             );
+      }
+      
+      pattern = {
+         0x48, 0x89, 0xE0,
+         0x48, 0x89, 0x58, WILDCARD,
+         0x48, 0x89, 0x50, WILDCARD,
+         0x55,
+         0x56,
+         0x57,
+         0x41, 0x54,
+         0x41, 0x55,
+         0x41, 0x56,
+         0x41, 0x57,
+         0x48, 0x8D, 0x68, WILDCARD,
+         0x48, 0x81, 0xEC, WILDCARD, WILDCARD, WILDCARD, WILDCARD,
+         0x0F, 0x29, 0x70, WILDCARD,
+         0x0F, 0x29, 0x78, WILDCARD,
+         0x49, 0x8B, 0x40,
+      };
+      
+      results = System::ScanMemoryForPattern(
+         reinterpret_cast<std::byte*>(engine_module),
+         section_size,
+         pattern
+         );
 
-         if (g_net_hacking_renderer_hook)
-         {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
-         }
-         else
-         {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
-         }
+      if (!results.empty() && !g_smaa_renderer_hook)
+      {
+         void* fn = reinterpret_cast<void*>(results[0]);
+
+         g_smaa_renderer_hook = safetyhook::create_inline(
+            fn,
+            Hooked_CPostFxSMAARendererPrepare
+            );
       }
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Unjitter Depth"), ShaderDefinition{"Luma_CopyDepth", reshade::api::pipeline_subobject_type::pixel_shader});
@@ -880,6 +894,14 @@ public:
          //has_set_luma_cb_material = false;
          return DrawOrDispatchOverrideType::None;
       }
+
+      // This shader will draw regardless of current render context
+      if (original_shader_hashes.Contains(shader_hashes_SkyMoon))
+      {
+         native_device_context->PSGetConstantBuffers(0, 1, game_device_data.viewport_cbv.put());
+         native_device_context->OMGetRenderTargets(1, game_device_data.source_color_rtv.put(), nullptr);
+         return DrawOrDispatchOverrideType::None;
+      }
       
       if (m_viewportPrivateData && CDeferredFxAntialiasRenderer && !bIsNetHackingRendering && GetAAOption() == OPTION_SMAA_T2X)
       {
@@ -909,15 +931,13 @@ public:
          {
             if (device_data.sr_type != SR::Type::None)
             {
-               ComPtr<ID3D11ShaderResourceView> srv;
-               ComPtr<ID3D11Buffer> cbv;
-               native_device_context->PSGetShaderResources(1, 1, srv.put());
-               native_device_context->PSGetConstantBuffers(0, 1, cbv.put());
-                  
+               if (game_device_data.viewport_cbv.get() == nullptr)
                {
-                  game_device_data.source_color_srv = srv;
+                  ComPtr<ID3D11Buffer> cbv;
+                  native_device_context->PSGetConstantBuffers(0, 1, cbv.put());
                   game_device_data.viewport_cbv = cbv;
                }
+               
                return DrawOrDispatchOverrideType::Skip;
             }
          }
@@ -930,7 +950,25 @@ public:
             }
          }
       }
-
+#if DEVELOPMENT
+      else if (!has_printed_dlss_skip_reason)
+      {
+         has_printed_dlss_skip_reason = true;
+         
+         if (game_device_data.source_color_rtv.get() == nullptr)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: source color is null.");
+         
+         if (!m_viewportPrivateData)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: m_viewportPrivateData is null.");
+         
+         if (!CDeferredFxAntialiasRenderer)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: CDeferredFxAntialiasRenderer is null.");
+         
+         if (bIsNetHackingRendering)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: Nethacking is rendering.");
+      }
+#endif
+      
       return DrawOrDispatchOverrideType::None;
    }
    
@@ -979,8 +1017,7 @@ public:
             game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
             
             const bool dlss_inputs_valid = 
-               game_device_data.source_color_srv.get() != nullptr
-            && m_deferredFXRendererContextTextures.m_motionVectors != nullptr
+               m_deferredFXRendererContextTextures.m_motionVectors != nullptr
             && m_deferredFXRendererContextTextures.m_motionVectors->m_texture != nullptr
             && m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_shaderResourceView != nullptr
             && m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_renderTargetView != nullptr
@@ -1001,15 +1038,6 @@ public:
             DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
             draw_state_stack.Cache(immediate_ctx.get(), device_data.uav_max_count);
             compute_state_stack.Cache(immediate_ctx.get(), device_data.uav_max_count);
-            
-            {
-               ComPtr<ID3D11Resource> color_resource;
-               game_device_data.source_color_srv->GetResource(color_resource.put());
-               if (color_resource)
-               {
-                  color_resource->QueryInterface(game_device_data.source_color.put());
-               }
-            }
 
             if (device_data.sr_type != SR::Type::None && !device_data.has_drawn_sr)
             {
@@ -1053,6 +1081,25 @@ public:
                   projection_jitters.x = m_viewportPrivateData->m_motionBlur.m_lastCurrentCamera.m_jitter[0] * (float)m_viewportPrivateData->m_viewportSize[0];
                   projection_jitters.y = m_viewportPrivateData->m_motionBlur.m_lastCurrentCamera.m_jitter[1] * (float)m_viewportPrivateData->m_viewportSize[1];
                }
+               
+               ComPtr<ID3D11Device> native_device;
+               immediate_ctx->GetDevice(native_device.put());
+               
+               {
+                  ComPtr<ID3D11Resource> color_resource;
+                  game_device_data.source_color_rtv->GetResource(color_resource.put());
+                  if (color_resource)
+                  {
+                     color_resource->QueryInterface(game_device_data.source_color.put());
+                  }
+                  
+                  D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+                  srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                  srv_desc.Texture2D.MostDetailedMip = 0;
+                  srv_desc.Texture2D.MipLevels = 1;
+                  native_device->CreateShaderResourceView(game_device_data.source_color.get(), &srv_desc, game_device_data.source_color_srv.put());
+               }
 
                D3D11_TEXTURE2D_DESC taa_output_texture_desc;
                game_device_data.source_color->GetDesc(&taa_output_texture_desc);
@@ -1065,9 +1112,6 @@ public:
                   dlss_output_texture_desc.Width = m_viewportPrivateData->m_viewportSize[0];
                   dlss_output_texture_desc.Height = m_viewportPrivateData->m_viewportSize[1];
                   dlss_output_texture_desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-
-                  ComPtr<ID3D11Device> native_device;
-                  immediate_ctx->GetDevice(native_device.put());
 
                   if (device_data.sr_output_color.get())
                   {
@@ -1294,7 +1338,18 @@ public:
             }
          }
       }
-
+      
+      {
+         std::stringstream s;
+         s << std::format("Is SMAA rendering: {}", bIsSMAARendering ? "true" : "false");
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+         s.clear();
+         s.str("");
+         s << std::format("Is Deferred Antialiasing rendering: {}", bIsDeferredAntialiasingRendering ? "true" : "false");
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+      }
+      
       JitterUpdate(device_data.sr_type != SR::Type::None);
       
       if (!custom_texture_mip_lod_bias_offset && CDeferredFxAntialiasRenderer)
@@ -1319,11 +1374,14 @@ public:
          //std::lock_guard<std::mutex> lock(game_device_data.game_device_data_mutex);
          game_device_data.source_color.reset();
          game_device_data.source_color_srv.reset();
+         game_device_data.source_color_rtv.reset();
          game_device_data.viewport_cbv.reset();
          game_device_data.postfx_mask_rtv.reset();
          
          CDeferredFxAntialiasRenderer = 0;
          bIsNetHackingRendering = false;
+         bIsSMAARendering = false;
+         bIsDeferredAntialiasingRendering = false;
          m_deferredFXRendererContext = nullptr;
          m_viewportPrivateData = nullptr;
          m_viewportParamProvider = nullptr;
@@ -1337,6 +1395,7 @@ public:
          m_deferredFXRendererContextTextures.m_normalsTexture = nullptr;
          m_deferredFXRendererContextTextures.m_gBufferAOTexture = nullptr;
          m_deferredFXRendererContextTextures.m_fullAOTexture = nullptr;
+         m_deferredFXRendererContextTextures.m_sourceTexture = nullptr;
          
          motion_vector_contexts.clear();
          
@@ -1344,6 +1403,10 @@ public:
          game_device_data.skin_lookup.clear();
          std::swap(game_device_data.prev_skin_buffer, game_device_data.skin_buffer);
          game_device_data.skin_buffer->Reset();
+         
+#if DEVELOPMENT
+         has_printed_dlss_skip_reason = false;
+#endif
       }
 
       if (!device_data.has_drawn_sr)
@@ -1593,6 +1656,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          0x2C3F4493,
          0x33C5E45E
       };
+      shader_hashes_SkyMoon.pixel_shaders = {
+         0xA16E9FBD,
+         0xDA6D8AA0, // temporal filtering version
+      };
 
 #if DEVELOPMENT
       forced_shader_names.emplace(Shader::Hash_StrToNum("74F79E89"), "Clean to Black");
@@ -1605,6 +1672,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(Shader::Hash_StrToNum("5554278D"), "SMAA");
       forced_shader_names.emplace(Shader::Hash_StrToNum("29C5D2F6"), "Temporal Accumulation");
       forced_shader_names.emplace(Shader::Hash_StrToNum("4053E8B2"), "Temporal Accumulation Resolve");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("C8873B8F"), "Water Grid Vector Map Update");
 #endif
 
       game = new WatchDogs2();

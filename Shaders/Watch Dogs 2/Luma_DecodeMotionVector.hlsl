@@ -177,7 +177,7 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 
 	g_updatedVelocityTex[tid] = velocity;
 	
-	float4 depth4 = g_depthTex.GatherRed(s_depthSampler, pixelUV.xy - LumaData.GameData.CurrJitters*ViewportSize.zw, int2(0, 0));
+	float4 depth4 = g_depthTex.GatherRed(s_depthSampler, pixelUV.xy + LumaData.GameData.CurrJitters*ViewportSize.zw*float2(1, -1), int2(0, 0));
 	float maxDepth = max(max(depth4.x, depth4.y), max(depth4.z, depth4.w));
 	
 	g_unjitteredDepthTex[tid] = maxDepth;

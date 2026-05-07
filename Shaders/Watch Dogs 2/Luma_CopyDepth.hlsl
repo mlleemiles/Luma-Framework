@@ -115,13 +115,15 @@ SPixelOutput main(
 	float4 maskCombined[4];
 	uint i = 0;
 	
+	float2 uv = (pos.xy + 0.5) * ViewportSize.zw + LumaData.GameData.CurrJitters * ViewportSize.zw * float2(1, -1);
+	
 	[unroll]
     for (i = 0; i < 4; ++i)
     {
-        float2 motionVectors = velocityTexture.Load(int3(pos.xy + Offsets[i], 0)).xy;
+        float2 motionVectors = velocityTexture.SampleLevel(s_depthSampler, uv.xy, 0, Offsets[i]);//velocityTexture.Load(int3(pos.xy + Offsets[i], 0)).xy;
         motionCombined[i] = motionVectors;
 		
-        float4 mask = sourcePostFXMaskTexture.Load(int3(pos.xy + Offsets[i], 0)).xyzw;
+        float4 mask = sourcePostFXMaskTexture.SampleLevel(s_depthSampler, uv.xy, 0, Offsets[i]);//sourcePostFXMaskTexture.Load(int3(pos.xy + Offsets[i], 0)).xyzw;
         maskCombined[i] = mask;
     }
 	
@@ -130,7 +132,7 @@ SPixelOutput main(
     maxVel = MaxVelocity(maxVel, motionCombined[3]);
 	output.color = MaxVelocity(maxVel, centerVel);
 
-	output.mask = max(max(centerMask, maskCombined[0]), max(max(maskCombined[1], maskCombined[2]), maskCombined[3]));
+	output.mask = centerMask;//max(max(centerMask, maskCombined[0]), max(max(maskCombined[1], maskCombined[2]), maskCombined[3]));
 
 	float depth = sourceTexture.Load(int3(pos.xy, 0)).x;
 	output.depth = depth;
