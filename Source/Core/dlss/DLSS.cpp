@@ -399,6 +399,14 @@ bool NGX::DLSS::Draw(const SR::InstanceData* data, ID3D11DeviceContext* command_
 	eval_params.Feature.pInColor = draw_data.source_color;
 	eval_params.Feature.pInOutput = draw_data.output_color; // Needs to be a UAV
 	eval_params.pInExposureTexture = draw_data.exposure; // Only used in HDR mode. Needs to be a 2D texture.
+	if (draw_data.bias_mask)
+	{
+		eval_params.pInBiasCurrentColorMask = draw_data.bias_mask;
+	}
+	if (draw_data.transparency_alpha)
+	{
+		eval_params.pInTransparencyMask = draw_data.transparency_alpha;
+	}
 	if (draw_data.pre_exposure != 0.f)
 	{
 		eval_params.InPreExposure = draw_data.pre_exposure;
