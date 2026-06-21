@@ -13,7 +13,6 @@ static inline T* ResolveRipRelative(void* instr, std::ptrdiff_t dispOffset, std:
    return reinterpret_cast<T*>(dest);
 }
 
-
 struct CTexture
 {
    uintptr_t* __vftable;
@@ -126,9 +125,27 @@ struct CShaderParameterMatrix44
    DirectX::XMFLOAT4X4 matrix;
 };
 
+struct ConstantBuffer
+{
+   uint8_t _unk_field_0[0x20];
+   ID3D11Buffer* m_nativeBuffer; // 0x20  (size 0x8)
+   ID3D11ShaderResourceView* m_srv; // 0x28  (size 0x8)
+   ID3D11UnorderedAccessView* m_uav; // 0x30  (size 0x8)
+};
+
+struct SShadowedConstantBuffer
+{
+   ConstantBuffer* m_buffer; // 0x0  (size 0x8)
+   uintptr_t* m_owner; // 0x8  (size 0x8), points to the parent CViewportShaderParameterProvider
+};
+
 struct CViewportShaderParameterProvider
 {
-   uint8_t _unk_field_0[0x30];
+   uint8_t _unk_field_0[0x10];
+   unsigned int m_executeOrder; // 0x0  (size 0x4)
+   unsigned int m_padding4; // 0x4  (size 0x4)
+   SShadowedConstantBuffer* m_constantBuffer; // 0x8  (size 0x8)
+   uint8_t _unk_field_1[0x10];
    CShaderParameterMatrix44 m_viewProjectionMatrix;
    CShaderParameterMatrix44 m_projectionMatrix;
    CShaderParameterMatrix44 m_viewMatrix;
@@ -148,6 +165,7 @@ struct CDeferredFxRendererContextTextures
    CIndirectTexture* m_depthStencilSurface; // 0x18  (size 0x8)
    CIndirectTexture* m_motionVectors; // 0x20  (size 0x8)
    CIndirectTexture* m_normalsTexture; // 0x28  (size 0x8)
+   CIndirectTexture* m_sourceTexture; // new from SMAA
    uintptr_t* m_gBufferAOTexture; // 0x30  (size 0x8)
    uintptr_t* m_fullAOTexture; // 0x38  (size 0x8)
 };
@@ -189,6 +207,7 @@ enum AAOptions {
 
 inline SafetyHookInline g_deferred_fx_antialias_renderer_hook;
 inline SafetyHookInline g_net_hacking_renderer_hook;
+inline SafetyHookInline g_smaa_renderer_hook;
 
 extern uintptr_t* AAOptionBase;
 extern uintptr_t CDeferredFxAntialiasRenderer;
@@ -201,13 +220,14 @@ extern CTexture* m_currDeferredFXAntialiasFrameTexture;
 extern uintptr_t JitterTableOffset;
 
 extern std::atomic<bool> bIsNetHackingRendering;
+extern std::atomic<bool> bIsSMAARendering;
+extern std::atomic<bool> bIsDeferredAntialiasingRendering;
 
 AAOptions GetAAOption();
-//float GetGameDeltaTime();
-//void GetViewportSize();
 
 using fnGetExistingSharedTexture = __int64(__fastcall*)(__int64 a1, unsigned int a2);
 extern fnGetExistingSharedTexture GetExistingSharedTexture;
 
 __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintptr_t* a2);
 __int64 __fastcall Hooked_CNetHackingRendererPrepare(__int64 a1, __int64 a2, __int64 a3, __int64 a4, __int64 a5, __int64 a6, __int64 a7, __int64 a8);
+__int64 __fastcall Hooked_CPostFxSMAARendererPrepare(__int64 a1, __int64 a2, unsigned __int64 *a3, __int64 a4, __int64 a5);

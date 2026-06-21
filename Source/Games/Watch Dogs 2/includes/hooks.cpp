@@ -12,6 +12,8 @@ CTexture* m_currDeferredFXAntialiasFrameTexture = nullptr;
 uintptr_t JitterTableOffset = 0;
 
 std::atomic<bool> bIsNetHackingRendering = false;
+std::atomic<bool> bIsSMAARendering = false;
+std::atomic<bool> bIsDeferredAntialiasingRendering = false;
 
 fnGetExistingSharedTexture GetExistingSharedTexture = nullptr;
 
@@ -59,6 +61,8 @@ __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintpt
       m_currDeferredFXAntialiasFrameTexture = m_deferredFxAntialiasRenderer->m_currDeferredFXAntialiasFrameTexture;
    }
    
+   bIsDeferredAntialiasingRendering = true;
+   
    return original_result;
 }
 
@@ -69,5 +73,58 @@ __int64 __fastcall Hooked_CNetHackingRendererPrepare(__int64 a1, __int64 a2, __i
    
    bIsNetHackingRendering = true;
    
+   return original_result;
+}
+
+__int64 Hooked_CPostFxSMAARendererPrepare(__int64 a1, __int64 a2, unsigned __int64 *a3, __int64 a4, __int64 a5)
+{
+   auto original_result = g_smaa_renderer_hook
+       .unsafe_call<__int64>(a1, a2, a3, a4, a5);
+   
+   CIndirectTexture* texture = reinterpret_cast<CIndirectTexture*>(a5);
+   if (texture->m_format == 0x21)
+   {
+      m_deferredFXRendererContextTextures.m_sourceTexture = reinterpret_cast<CIndirectTexture*>(a5);
+   }
+   else
+   {
+      std::stringstream s;
+      s << std::format("Incompatible DLSS Texture Format: {}", texture->m_format);
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+   }
+   
+   bIsSMAARendering = true;
+  /*       
+   {
+      std::stringstream s;
+      s << std::format("Is SMAA rendering: {}", bIsSMAARendering ? "true" : "false");
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+      s.clear();
+      s.str("");
+      s << "CPostFxSMAARenderer: 0x" << std::hex << a1;
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+      s.clear();
+      s.str("");
+      s << "SPostFxInputOutputStates: 0x" << std::hex << a2;
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+      s.clear();
+      s.str("");
+      s << "SPostFxParameters: 0x" << std::hex << a3;
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+      s.clear();
+      s.str("");
+      s << "CPostFxPrivateData: 0x" << std::hex << a4;
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+      s.clear();
+      s.str("");
+      s << "CIndirectTexture: 0x" << std::hex << a5;
+      reshade::log::message(reshade::log::level::info, s.str().c_str());
+   }
+   */
    return original_result;
 }

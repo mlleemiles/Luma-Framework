@@ -289,6 +289,16 @@ float3 ComposeUI(float3 pos, float3 linearSceneColor, float gamePaperWhite, floa
 	return linearComposedColor;
 }
 
+float LinearToSRGB( float v )
+{
+    return ( v <= 0.0031308f ) ? 12.92f*v : 1.055f*pow( abs( v ), 1.0f/2.4f ) - 0.055f;
+}
+
+float3 LinearToSRGB( float3 v )
+{
+    return float3( LinearToSRGB( v.x ), LinearToSRGB( v.y ), LinearToSRGB( v.z ) );
+}
+
 // Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction)
 float4 main(float4 pos : SV_Position) : SV_Target0
 {
@@ -326,6 +336,12 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 	float mipLevel1 = log2(sourceHeight / targetHeight1);
 	float mipLevel2 = log2(sourceHeight / targetHeight2);
 	float4 color = sourceTexture.Load((int3)pos.xyz);
+	
+#if POST_PROCESS_SPACE_TYPE == 0
+  color.xyz = LinearToSRGB(color.xyz);
+#endif
+	return color;
+	
 	float4 mipColor1 = 0.0;
 	float4 mipColor2 = 0.0;
 #if 0

@@ -120,9 +120,10 @@ SPixelOutput main(
     {
         float2 motionVectors = velocityTexture.Load(int3(pos.xy + Offsets[i], 0)).xy;
         motionCombined[i] = motionVectors;
-		
+		/*
         float4 mask = sourcePostFXMaskTexture.Load(int3(pos.xy + Offsets[i], 0)).xyzw;
         maskCombined[i] = mask;
+		*/
     }
 	
 	float2 maxVel = MaxVelocity(motionCombined[0], motionCombined[1]);
@@ -130,7 +131,7 @@ SPixelOutput main(
     maxVel = MaxVelocity(maxVel, motionCombined[3]);
 	output.color = MaxVelocity(maxVel, centerVel);
 
-	output.mask = max(max(centerMask, maskCombined[0]), max(max(maskCombined[1], maskCombined[2]), maskCombined[3]));
+	output.mask = centerMask;//sourcePostFXMaskTexture.Load(int3(pos.xy, 0)).xyzw;
 
 	float depth = sourceTexture.Load(int3(pos.xy, 0)).x;
 	output.depth = depth;

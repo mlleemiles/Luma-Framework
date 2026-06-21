@@ -2508,6 +2508,8 @@ namespace
 
       ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
       DeviceData& device_data = *device->get_private_data<DeviceData>(); // No need to lock the data mutex here, it could be concurrently used at this point
+      
+      device_data.shutting_down.store(true, std::memory_order_release);
 
       game->OnDestroyDeviceData(device_data);
 
@@ -2621,6 +2623,7 @@ namespace
 
       // There's only one swapchain so it's fine if this is global ("OnInitSwapchain()" will always be called later anyway)
       bool changed = false;
+      return changed;
 
 #if DEVELOPMENT
       ASSERT_ONCE(desc.back_buffer.texture.format != reshade::api::format::unknown); // With the latest ReShade changes, this should never be set to Unknown, even if the game did a swapchain buffer resize and preserved the previous format.
@@ -7032,6 +7035,10 @@ namespace
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       if (&device_data == nullptr)
          return;
+      
+      if (device_data.shutting_down.load(std::memory_order_acquire))
+         return;
+      
       // This only seems to happen when the game shuts down in Prey (as any destroy callback, it can be called from an arbitrary thread, but that's fine).
       // We don't need to check the custom samplers within the map even if they might be the same object, because they are strong pointers and thus wouldn't get destroyed if they were non null.
       s_mutex_samplers.lock();

@@ -541,6 +541,8 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::atomic<bool> has_drawn_sr = false;
    // Set to true once we can tell with certainty that TAA was active in the game
    std::atomic<bool> taa_detected = false;
+   // Signaling device is being destroyed to avoid late resource destruction callback
+   std::atomic<bool> shutting_down = false;
 
 #if ENABLE_SR
    std::atomic<bool> force_reset_sr = false;

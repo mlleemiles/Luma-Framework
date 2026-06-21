@@ -76,8 +76,12 @@ cbuffer cbViewport : register(b0)
 
 Texture2D<float4> g_gBufferVelocityTex : register(t0);
 Texture2D<float4> g_depthTex : register(t1);
+Texture2D<float4> g_postFXMaskTex : register(t2);
+Texture2D<float> g_previousDepthTex : register(t3);
+Texture2D<float4> g_previousPostFXMaskTex : register(t4);
 RWTexture2D<float2> g_updatedVelocityTex : register(u0);
-RWTexture2D<float> g_unjitteredDepthTex : register(u1);
+RWTexture2D<float> g_currentDepthTex : register(u1);
+RWTexture2D<float4> g_currentPostFXMaskTex : register(u2);
 SamplerState s_depthSampler : register(s0);
 
 // Objects to be excluded from certain velocity effects signal it by adding a large offset to the velocity red channel.
@@ -153,7 +157,7 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 	float2 pixelUV = ((float2)tid + 0.5f) * ViewportSize.zw;
 	CalculateCameraBasedVelocity_ViewSpaceDepth(velocity, pixelUV, tid);
 	
-	float2 jitterDelta = LumaData.GameData.CurrJitters - LumaData.GameData.PrevJitters;
+	//float2 jitterDelta = LumaData.GameData.CurrJitters - LumaData.GameData.PrevJitters;
 	
 	float2 gBufferVelocity = g_gBufferVelocityTex.Load(int3((int2)tid, 0)).xy;
 	
@@ -177,8 +181,24 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 
 	g_updatedVelocityTex[tid] = velocity;
 	
+	float velocityLength = dot(-velocity.xy, -velocity.xy);
+	float velocityWeight = min(1.0f, velocityLength * 500.0f);
+	velocityWeight = saturate(velocityWeight + 0.25);
+	
+	float2 previousUV = pixelUV - velocity;
+	
+	float currentDepth = g_depthTex.Load(int3((int2)tid.xy, 0)).x;
+	float previousDepth = g_previousDepthTex.SampleLevel(s_depthSampler, previousUV, 0).x;
+	
+	float4 currentMask = g_postFXMaskTex.Load(int3((int2)tid.xy, 0)).xyzw;
+	float4 previousMask = g_previousPostFXMaskTex.SampleLevel(s_depthSampler, previousUV, 0).xyzw;
+	
+	g_updatedVelocityTex[tid] = float2(lerp(previousDepth, currentDepth, velocityWeight).x, 0.0);
+	
+	/*
 	float4 depth4 = g_depthTex.GatherRed(s_depthSampler, pixelUV.xy - LumaData.GameData.CurrJitters*ViewportSize.zw, int2(0, 0));
 	float maxDepth = max(max(depth4.x, depth4.y), max(depth4.z, depth4.w));
-	
-	g_unjitteredDepthTex[tid] = maxDepth;
+	*/
+	g_currentDepthTex[tid] = lerp(previousDepth, currentDepth, velocityWeight);
+	g_currentPostFXMaskTex[tid] = lerp(previousMask, currentMask, velocityWeight);
 }

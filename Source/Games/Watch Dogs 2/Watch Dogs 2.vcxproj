@@ -306,7 +306,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="includes\safetyhook.hpp" />
-    <ClInclude Include="includes\stretchy_buffer.hpp" />
+    <ClInclude Include="includes\stretchy_buffer.h" />
     <ClInclude Include="includes\Zydis.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

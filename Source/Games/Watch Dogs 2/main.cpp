@@ -57,9 +57,9 @@ namespace
       else
       {
          jit[0].x = 0.25f;
-         jit[0].y = 0.25f;
+         jit[0].y = -0.25f;
          jit[1].x = -0.25f;
-         jit[1].y = -0.25f;
+         jit[1].y = 0.25f;
       }
       std::memcpy((void*)JitterTableOffset, &jit, sizeof(jit));
    }
@@ -154,6 +154,7 @@ namespace
    ShaderHashesList shader_hashes_ClothPreTransformed;
    ShaderHashesList shader_hashes_PostFXMask;
    ShaderHashesList shader_hashes_TemporalFiltering;
+   ShaderHashesList shader_hashes_SkyMoon;
 #if HDR_ENABLED
    ShaderHashesList shader_hashes_ColorGradingLUT;
 #endif
@@ -161,6 +162,10 @@ namespace
    std::shared_mutex materials_mutex;
    
    std::unordered_set<ID3D11DeviceContext*> motion_vector_contexts;
+   
+#if DEVELOPMENT
+   bool has_printed_dlss_skip_reason = false;
+#endif
 }
 
 struct GameDeviceDataWatchDogs2 final : public GameDeviceData
@@ -172,6 +177,7 @@ struct GameDeviceDataWatchDogs2 final : public GameDeviceData
    // textures we got from the game
    ComPtr<ID3D11Texture2D> source_color;
    ComPtr<ID3D11ShaderResourceView> source_color_srv;
+   ComPtr<ID3D11RenderTargetView> source_color_rtv;
    ComPtr<ID3D11Buffer> viewport_cbv;
    ComPtr<ID3D11ShaderResourceView> sr_output_color_srv;
    
@@ -179,13 +185,21 @@ struct GameDeviceDataWatchDogs2 final : public GameDeviceData
    ComPtr<ID3D11ShaderResourceView> decoded_motion_vectors_srv;
    ComPtr<ID3D11UnorderedAccessView> decoded_motion_vectors_uav;
    
-   ComPtr<ID3D11Texture2D> unjittered_depth;
-   ComPtr<ID3D11ShaderResourceView> unjittered_depth_srv;
-   ComPtr<ID3D11UnorderedAccessView> unjittered_depth_uav;
+   ComPtr<ID3D11Texture2D> current_depth;
+   ComPtr<ID3D11ShaderResourceView> current_depth_srv;
+   ComPtr<ID3D11UnorderedAccessView> current_depth_uav;
    
-   ComPtr<ID3D11Texture2D> unjittered_postfx_mask;
-   ComPtr<ID3D11ShaderResourceView> unjittered_postfx_mask_srv;
-   ComPtr<ID3D11UnorderedAccessView> unjittered_postfx_mask_uav;
+   ComPtr<ID3D11Texture2D> previous_depth;
+   ComPtr<ID3D11ShaderResourceView> previous_depth_srv;
+   ComPtr<ID3D11UnorderedAccessView> previous_depth_uav;
+   
+   ComPtr<ID3D11Texture2D> current_postfx_mask;
+   ComPtr<ID3D11ShaderResourceView> current_postfx_mask_srv;
+   ComPtr<ID3D11UnorderedAccessView> current_postfx_mask_uav;
+   
+   ComPtr<ID3D11Texture2D> previous_postfx_mask;
+   ComPtr<ID3D11ShaderResourceView> previous_postfx_mask_srv;
+   ComPtr<ID3D11UnorderedAccessView> previous_postfx_mask_uav;
    
    ComPtr<ID3D11RenderTargetView> postfx_mask_rtv;
    
@@ -216,13 +230,21 @@ struct GameDeviceDataWatchDogs2 final : public GameDeviceData
       decoded_motion_vectors_srv.reset();
       decoded_motion_vectors_uav.reset();
       
-      unjittered_depth.reset();
-      unjittered_depth_srv.reset();
-      unjittered_depth_uav.reset();
+      current_depth.reset();
+      current_depth_srv.reset();
+      current_depth_uav.reset();
       
-      unjittered_postfx_mask.reset();
-      unjittered_postfx_mask_srv.reset();
-      unjittered_postfx_mask_uav.reset();
+      previous_depth.reset();
+      previous_depth_srv.reset();
+      previous_depth_uav.reset();
+      
+      current_postfx_mask.reset();
+      current_postfx_mask_srv.reset();
+      current_postfx_mask_uav.reset();
+      
+      previous_postfx_mask.reset();
+      previous_postfx_mask_srv.reset();
+      previous_postfx_mask_uav.reset();
    }
 };
 
@@ -305,14 +327,7 @@ public:
          section_size,
          pattern
          );
-#if DEBUG_LOG
-      for (auto addr : results)
-      {
-         std::stringstream s;
-         s << "Candidate: 0x" << std::hex << (uintptr_t)addr;
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
-      }
-#endif
+      
       if (!results.empty() && !g_deferred_fx_antialias_renderer_hook)
       {
          void* fn = reinterpret_cast<void*>(results[0]);
@@ -321,15 +336,6 @@ public:
             fn,
             Hooked_CDeferredFxAntialiasRendererPrepare
             );
-
-         if (g_deferred_fx_antialias_renderer_hook)
-         {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
-         }
-         else
-         {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
-         }
       }
       
       pattern = {
@@ -348,7 +354,6 @@ public:
          0x48, 0x8B, 0xB5,
       };
       
-      
       results = System::ScanMemoryForPattern(
          reinterpret_cast<std::byte*>(engine_module),
          section_size,
@@ -363,15 +368,40 @@ public:
             fn,
             Hooked_CNetHackingRendererPrepare
             );
+      }
+      
+      pattern = {
+         0x48, 0x89, 0xE0,
+         0x48, 0x89, 0x58, WILDCARD,
+         0x48, 0x89, 0x50, WILDCARD,
+         0x55,
+         0x56,
+         0x57,
+         0x41, 0x54,
+         0x41, 0x55,
+         0x41, 0x56,
+         0x41, 0x57,
+         0x48, 0x8D, 0x68, WILDCARD,
+         0x48, 0x81, 0xEC, WILDCARD, WILDCARD, WILDCARD, WILDCARD,
+         0x0F, 0x29, 0x70, WILDCARD,
+         0x0F, 0x29, 0x78, WILDCARD,
+         0x49, 0x8B, 0x40,
+      };
+      
+      results = System::ScanMemoryForPattern(
+         reinterpret_cast<std::byte*>(engine_module),
+         section_size,
+         pattern
+         );
 
-         if (g_net_hacking_renderer_hook)
-         {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
-         }
-         else
-         {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
-         }
+      if (!results.empty() && !g_smaa_renderer_hook)
+      {
+         void* fn = reinterpret_cast<void*>(results[0]);
+
+         g_smaa_renderer_hook = safetyhook::create_inline(
+            fn,
+            Hooked_CPostFxSMAARendererPrepare
+            );
       }
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Unjitter Depth"), ShaderDefinition{"Luma_CopyDepth", reshade::api::pipeline_subobject_type::pixel_shader});
@@ -522,93 +552,91 @@ public:
          
          return new_code;
       }
-      
+
+      if (type != reshade::api::pipeline_subobject_type::compute_shader)
+         return nullptr;
+
+      std::unique_ptr<std::byte[]> new_code = nullptr;
+
+      // This compute shader was unsafe, it was reading and writing to the same coordinates of the same resources, from different threads at the same time, hence it needs some barriers to be added
+      // Credits to Nukem, Blisto, doitsujin and pendingchaos for helping figure it out.
+      if (shader_hash != 0x28BA3808)
       {
-         if (type != reshade::api::pipeline_subobject_type::compute_shader)
-            return nullptr;
-
-         std::unique_ptr<std::byte[]> new_code = nullptr;
-
-         // This compute shader was unsafe, it was reading and writing to the same coordinates of the same resources, from different threads at the same time, hence it needs some barriers to be added
-         // Credits to Nukem, Blisto, doitsujin and pendingchaos for helping figure it out.
-         if (shader_hash != 0x28BA3808)
-         {
-            return new_code;
-         }
-
-         std::vector<uint8_t> appended_patch;
-         std::vector<const std::byte*> appended_patches_addresses;
-
-         // Matches "AllMemoryBarrierWithGroupSync()" ("sync_uglobal_g_t" in asm)
-         constexpr uint32_t flags =
-            D3D11_SB_SYNC_THREADS_IN_GROUP |
-            D3D11_SB_SYNC_THREAD_GROUP_SHARED_MEMORY |
-            D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GROUP |
-            D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GLOBAL;
-         uint32_t opcode_token =
-            ENCODE_D3D10_SB_OPCODE_TYPE(D3D11_SB_OPCODE_SYNC) |
-            ENCODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(1) |
-            ENCODE_D3D11_SB_SYNC_FLAGS(flags);
-#if 1 // TODOFT: test... we got "sync_sat_uglobal_g_t" otherwise?
-         // make 100% sure SAT is off (paranoia, but harmless)
-         opcode_token &= ~D3D10_SB_INSTRUCTION_SATURATE_MASK;
-#endif
-         std::vector<uint32_t> opcode_token_patch = std::vector<uint32_t>{opcode_token};
-
-         appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(opcode_token_patch.data()), reinterpret_cast<uint8_t*>(opcode_token_patch.data()) + opcode_token_patch.size() * sizeof(uint32_t));
-
-         size_t size_u32 = size / sizeof(uint32_t);
-         const uint32_t* code_u32 = reinterpret_cast<const uint32_t*>(code);
-         size_t i = 0;
-         while (i < size_u32)
-         {
-            uint32_t opcode_token = code_u32[i];
-            D3D10_SB_OPCODE_TYPE opcode_type = DECODE_D3D10_SB_OPCODE_TYPE(opcode_token);
-            size_t instruction_size = opcode_type == D3D10_SB_OPCODE_CUSTOMDATA ? code_u32[i + 1] : DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(opcode_token); // Includes itself
-
-            if (opcode_type == D3D10_SB_OPCODE_IF)
-            {
-               // Add the patch before every single branch value.
-               // Shift it by how much the data would have been shifted by prior patches we already added.
-               size_t i_add = appended_patches_addresses.size() * appended_patch.size() / sizeof(uint32_t); // Patches should always be a multiple of DWORD
-               appended_patches_addresses.emplace_back(reinterpret_cast<const std::byte*>(&code_u32[i + i_add]));
-            }
-
-            i += instruction_size;
-            if (instruction_size == 0)
-               break;
-         }
-
-         // Insert the patch for each address
-         if (!appended_patches_addresses.empty())
-         {
-            new_code = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
-
-            std::memcpy(new_code.get(), code, size);
-
-            size_t valid_size = size;
-
-            std::unique_ptr<std::byte[]> scratch_buffer = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
-
-            for (const auto appended_patches_address : appended_patches_addresses)
-            {
-               size_t insert_pos = appended_patches_address - code; // These are already shifted to account for the previously inserted patches
-
-               // Copy from the address we'll insert the patch at, until the end, into a temporary buffer
-               std::memcpy(scratch_buffer.get(), new_code.get() + insert_pos, valid_size - insert_pos);
-               // Insert the patch
-               std::memcpy(new_code.get() + insert_pos, appended_patch.data(), appended_patch.size());
-               // Fill back the previous data, shifted
-               std::memcpy(new_code.get() + insert_pos + appended_patch.size(), scratch_buffer.get(), valid_size - insert_pos);
-
-               valid_size += appended_patch.size();
-            }
-
-            size = valid_size;
-         }
-         
          return new_code;
       }
+
+      std::vector<uint8_t> appended_patch;
+      std::vector<const std::byte*> appended_patches_addresses;
+
+      // Matches "AllMemoryBarrierWithGroupSync()" ("sync_uglobal_g_t" in asm)
+      constexpr uint32_t flags =
+         D3D11_SB_SYNC_THREADS_IN_GROUP |
+         D3D11_SB_SYNC_THREAD_GROUP_SHARED_MEMORY |
+         D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GROUP |
+         D3D11_SB_SYNC_UNORDERED_ACCESS_VIEW_MEMORY_GLOBAL;
+      uint32_t opcode_token =
+         ENCODE_D3D10_SB_OPCODE_TYPE(D3D11_SB_OPCODE_SYNC) |
+         ENCODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(1) |
+         ENCODE_D3D11_SB_SYNC_FLAGS(flags);
+#if 1 // TODOFT: test... we got "sync_sat_uglobal_g_t" otherwise?
+      // make 100% sure SAT is off (paranoia, but harmless)
+      opcode_token &= ~D3D10_SB_INSTRUCTION_SATURATE_MASK;
+#endif
+      std::vector<uint32_t> opcode_token_patch = std::vector<uint32_t>{opcode_token};
+
+      appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(opcode_token_patch.data()), reinterpret_cast<uint8_t*>(opcode_token_patch.data()) + opcode_token_patch.size() * sizeof(uint32_t));
+
+      size_t size_u32 = size / sizeof(uint32_t);
+      const uint32_t* code_u32 = reinterpret_cast<const uint32_t*>(code);
+      size_t i = 0;
+      while (i < size_u32)
+      {
+         uint32_t opcode_token = code_u32[i];
+         D3D10_SB_OPCODE_TYPE opcode_type = DECODE_D3D10_SB_OPCODE_TYPE(opcode_token);
+         size_t instruction_size = opcode_type == D3D10_SB_OPCODE_CUSTOMDATA ? code_u32[i + 1] : DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(opcode_token); // Includes itself
+
+         if (opcode_type == D3D10_SB_OPCODE_IF)
+         {
+            // Add the patch before every single branch value.
+            // Shift it by how much the data would have been shifted by prior patches we already added.
+            size_t i_add = appended_patches_addresses.size() * appended_patch.size() / sizeof(uint32_t); // Patches should always be a multiple of DWORD
+            appended_patches_addresses.emplace_back(reinterpret_cast<const std::byte*>(&code_u32[i + i_add]));
+         }
+
+         i += instruction_size;
+         if (instruction_size == 0)
+            break;
+      }
+
+      // Insert the patch for each address
+      if (!appended_patches_addresses.empty())
+      {
+         new_code = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
+
+         std::memcpy(new_code.get(), code, size);
+
+         size_t valid_size = size;
+
+         std::unique_ptr<std::byte[]> scratch_buffer = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());
+
+         for (const auto appended_patches_address : appended_patches_addresses)
+         {
+            size_t insert_pos = appended_patches_address - code; // These are already shifted to account for the previously inserted patches
+
+            // Copy from the address we'll insert the patch at, until the end, into a temporary buffer
+            std::memcpy(scratch_buffer.get(), new_code.get() + insert_pos, valid_size - insert_pos);
+            // Insert the patch
+            std::memcpy(new_code.get() + insert_pos, appended_patch.data(), appended_patch.size());
+            // Fill back the previous data, shifted
+            std::memcpy(new_code.get() + insert_pos + appended_patch.size(), scratch_buffer.get(), valid_size - insert_pos);
+
+            valid_size += appended_patch.size();
+         }
+
+         size = valid_size;
+      }
+      
+      return new_code;
    }
    
    static bool CreateSamplers(ID3D11Device* native_device, GameDeviceDataWatchDogs2& game_device_data)
@@ -705,7 +733,7 @@ public:
       }
       
       tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
-      hr = native_device->CreateTexture2D(&tex_desc, nullptr, game_device_data.unjittered_depth.put());
+      hr = native_device->CreateTexture2D(&tex_desc, nullptr, game_device_data.current_depth.put());
       if (FAILED(hr))
       {
          std::stringstream s;
@@ -714,12 +742,30 @@ public:
          return false;
       }
       
+      hr = native_device->CreateTexture2D(&tex_desc, nullptr, game_device_data.previous_depth.put());
+      if (FAILED(hr))
+      {
+         std::stringstream s;
+         s << "History Depth: Texture Creation Failed";
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         return false;
+      }
+      
       tex_desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
-      hr = native_device->CreateTexture2D(&tex_desc, nullptr, game_device_data.unjittered_postfx_mask.put());
+      hr = native_device->CreateTexture2D(&tex_desc, nullptr, game_device_data.current_postfx_mask.put());
       if (FAILED(hr))
       {
          std::stringstream s;
          s << "Post FX Mask: Texture Creation Failed";
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         return false;
+      }
+      
+      hr = native_device->CreateTexture2D(&tex_desc, nullptr, game_device_data.previous_postfx_mask.put());
+      if (FAILED(hr))
+      {
+         std::stringstream s;
+         s << "History Post FX Mask: Texture Creation Failed";
          reshade::log::message(reshade::log::level::info, s.str().c_str());
          return false;
       }
@@ -738,7 +784,7 @@ public:
       }
       
       uav_desc.Format = DXGI_FORMAT_R32_FLOAT;
-      hr = native_device->CreateUnorderedAccessView(game_device_data.unjittered_depth.get(), &uav_desc, game_device_data.unjittered_depth_uav.put());
+      hr = native_device->CreateUnorderedAccessView(game_device_data.current_depth.get(), &uav_desc, game_device_data.current_depth_uav.put());
       if (FAILED(hr))
       {
          std::stringstream s;
@@ -746,13 +792,29 @@ public:
          reshade::log::message(reshade::log::level::info, s.str().c_str());
          return false;
       }
+      hr = native_device->CreateUnorderedAccessView(game_device_data.previous_depth.get(), &uav_desc, game_device_data.previous_depth_uav.put());
+      if (FAILED(hr))
+      {
+         std::stringstream s;
+         s << "History Depth: UAV Creation Failed";
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         return false;
+      }
       
       uav_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-      hr = native_device->CreateUnorderedAccessView(game_device_data.unjittered_postfx_mask.get(), &uav_desc, game_device_data.unjittered_postfx_mask_uav.put());
+      hr = native_device->CreateUnorderedAccessView(game_device_data.current_postfx_mask.get(), &uav_desc, game_device_data.current_postfx_mask_uav.put());
       if (FAILED(hr))
       {
          std::stringstream s;
          s << "Post FX Mask: UAV Creation Failed";
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         return false;
+      }
+      hr = native_device->CreateUnorderedAccessView(game_device_data.previous_postfx_mask.get(), &uav_desc, game_device_data.previous_postfx_mask_uav.put());
+      if (FAILED(hr))
+      {
+         std::stringstream s;
+         s << "History Post FX Mask: UAV Creation Failed";
          reshade::log::message(reshade::log::level::info, s.str().c_str());
          return false;
       }
@@ -772,7 +834,7 @@ public:
       }
       
       srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
-      hr = native_device->CreateShaderResourceView(game_device_data.unjittered_depth.get(), &srv_desc, game_device_data.unjittered_depth_srv.put());
+      hr = native_device->CreateShaderResourceView(game_device_data.current_depth.get(), &srv_desc, game_device_data.current_depth_srv.put());
       if (FAILED(hr))
       {
          std::stringstream s;
@@ -781,12 +843,30 @@ public:
          return false;
       }
       
+      hr = native_device->CreateShaderResourceView(game_device_data.previous_depth.get(), &srv_desc, game_device_data.previous_depth_srv.put());
+      if (FAILED(hr))
+      {
+         std::stringstream s;
+         s << "History Depth: SRV Creation Failed";
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         return false;
+      }
+      
       srv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-      hr = native_device->CreateShaderResourceView(game_device_data.unjittered_postfx_mask.get(), &srv_desc, game_device_data.unjittered_postfx_mask_srv.put());
+      hr = native_device->CreateShaderResourceView(game_device_data.current_postfx_mask.get(), &srv_desc, game_device_data.current_postfx_mask_srv.put());
       if (FAILED(hr))
       {
          std::stringstream s;
          s << "Post FX Mask: SRV Creation Failed";
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         return false;
+      }
+      
+      hr = native_device->CreateShaderResourceView(game_device_data.previous_postfx_mask.get(), &srv_desc, game_device_data.previous_postfx_mask_srv.put());
+      if (FAILED(hr))
+      {
+         std::stringstream s;
+         s << "History Post FX Mask: SRV Creation Failed";
          reshade::log::message(reshade::log::level::info, s.str().c_str());
          return false;
       }
@@ -880,6 +960,14 @@ public:
          //has_set_luma_cb_material = false;
          return DrawOrDispatchOverrideType::None;
       }
+
+      // This shader will draw regardless of current render context
+      if (original_shader_hashes.Contains(shader_hashes_SkyMoon))
+      {
+         native_device_context->PSGetConstantBuffers(0, 1, game_device_data.viewport_cbv.put());
+         native_device_context->OMGetRenderTargets(1, game_device_data.source_color_rtv.put(), nullptr);
+         return DrawOrDispatchOverrideType::None;
+      }
       
       if (m_viewportPrivateData && CDeferredFxAntialiasRenderer && !bIsNetHackingRendering && GetAAOption() == OPTION_SMAA_T2X)
       {
@@ -909,15 +997,13 @@ public:
          {
             if (device_data.sr_type != SR::Type::None)
             {
-               ComPtr<ID3D11ShaderResourceView> srv;
-               ComPtr<ID3D11Buffer> cbv;
-               native_device_context->PSGetShaderResources(1, 1, srv.put());
-               native_device_context->PSGetConstantBuffers(0, 1, cbv.put());
-                  
+               if (game_device_data.viewport_cbv.get() == nullptr)
                {
-                  game_device_data.source_color_srv = srv;
+                  ComPtr<ID3D11Buffer> cbv;
+                  native_device_context->PSGetConstantBuffers(0, 1, cbv.put());
                   game_device_data.viewport_cbv = cbv;
                }
+               
                return DrawOrDispatchOverrideType::Skip;
             }
          }
@@ -930,7 +1016,25 @@ public:
             }
          }
       }
-
+#if DEVELOPMENT
+      else if (!has_printed_dlss_skip_reason)
+      {
+         has_printed_dlss_skip_reason = true;
+         
+         if (game_device_data.source_color_rtv.get() == nullptr)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: source color is null.");
+         
+         if (!m_viewportPrivateData)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: m_viewportPrivateData is null.");
+         
+         if (!CDeferredFxAntialiasRenderer)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: CDeferredFxAntialiasRenderer is null.");
+         
+         if (bIsNetHackingRendering)
+            reshade::log::message(reshade::log::level::info, "DLSS Skip Reason: Nethacking is rendering.");
+      }
+#endif
+      
       return DrawOrDispatchOverrideType::None;
    }
    
@@ -979,8 +1083,7 @@ public:
             game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
             
             const bool dlss_inputs_valid = 
-               game_device_data.source_color_srv.get() != nullptr
-            && m_deferredFXRendererContextTextures.m_motionVectors != nullptr
+               m_deferredFXRendererContextTextures.m_motionVectors != nullptr
             && m_deferredFXRendererContextTextures.m_motionVectors->m_texture != nullptr
             && m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_shaderResourceView != nullptr
             && m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_renderTargetView != nullptr
@@ -1001,15 +1104,6 @@ public:
             DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
             draw_state_stack.Cache(immediate_ctx.get(), device_data.uav_max_count);
             compute_state_stack.Cache(immediate_ctx.get(), device_data.uav_max_count);
-            
-            {
-               ComPtr<ID3D11Resource> color_resource;
-               game_device_data.source_color_srv->GetResource(color_resource.put());
-               if (color_resource)
-               {
-                  color_resource->QueryInterface(game_device_data.source_color.put());
-               }
-            }
 
             if (device_data.sr_type != SR::Type::None && !device_data.has_drawn_sr)
             {
@@ -1053,6 +1147,25 @@ public:
                   projection_jitters.x = m_viewportPrivateData->m_motionBlur.m_lastCurrentCamera.m_jitter[0] * (float)m_viewportPrivateData->m_viewportSize[0];
                   projection_jitters.y = m_viewportPrivateData->m_motionBlur.m_lastCurrentCamera.m_jitter[1] * (float)m_viewportPrivateData->m_viewportSize[1];
                }
+               
+               ComPtr<ID3D11Device> native_device;
+               immediate_ctx->GetDevice(native_device.put());
+               
+               {
+                  ComPtr<ID3D11Resource> color_resource;
+                  game_device_data.source_color_rtv->GetResource(color_resource.put());
+                  if (color_resource)
+                  {
+                     color_resource->QueryInterface(game_device_data.source_color.put());
+                  }
+                  
+                  D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+                  srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                  srv_desc.Texture2D.MostDetailedMip = 0;
+                  srv_desc.Texture2D.MipLevels = 1;
+                  native_device->CreateShaderResourceView(game_device_data.source_color.get(), &srv_desc, game_device_data.source_color_srv.put());
+               }
 
                D3D11_TEXTURE2D_DESC taa_output_texture_desc;
                game_device_data.source_color->GetDesc(&taa_output_texture_desc);
@@ -1065,9 +1178,6 @@ public:
                   dlss_output_texture_desc.Width = m_viewportPrivateData->m_viewportSize[0];
                   dlss_output_texture_desc.Height = m_viewportPrivateData->m_viewportSize[1];
                   dlss_output_texture_desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-
-                  ComPtr<ID3D11Device> native_device;
-                  immediate_ctx->GetDevice(native_device.put());
 
                   if (device_data.sr_output_color.get())
                   {
@@ -1093,23 +1203,45 @@ public:
 #if DEBUG_LOG
                      reshade::log::message(reshade::log::level::info, "Decoding MV");
 #endif
+                     ID3D11Resource* mask_resource;
+                     ComPtr<ID3D11ShaderResourceView> mask_srv;
+                     if (game_device_data.postfx_mask_rtv.get())
+                     {
+                        game_device_data.postfx_mask_rtv->GetResource(&mask_resource);
+                        immediate_ctx->CopyResource(game_device_data.current_postfx_mask.get(), mask_resource);
+                        {
+                           ComPtr<ID3D11Device> native_device;
+                           immediate_ctx->GetDevice(native_device.put());
+                     
+                           D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+                           srv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                           srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                           srv_desc.Texture2D.MostDetailedMip = 0;
+                           srv_desc.Texture2D.MipLevels = 1;
+                           native_device->CreateShaderResourceView(mask_resource, &srv_desc, mask_srv.put());
+                        }
+                     }
+                     
                      SetLumaConstantBuffers(immediate_ctx.get(), cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
-                     ID3D11ShaderResourceView* srvs[] = {m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_shaderResourceView, m_deferredFXRendererContextTextures.m_linearDepthTexture->m_texture->m_shaderResourceView};
-                     ID3D11UnorderedAccessView* uavs[] = {game_device_data.decoded_motion_vectors_uav.get(), game_device_data.unjittered_depth_uav.get()};
+                     ID3D11ShaderResourceView* srvs[] = {m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_shaderResourceView, m_deferredFXRendererContextTextures.m_linearDepthTexture->m_texture->m_shaderResourceView, mask_srv.get(), game_device_data.previous_depth_srv.get(), game_device_data.previous_postfx_mask_srv.get()};
+                     ID3D11UnorderedAccessView* uavs[] = {game_device_data.decoded_motion_vectors_uav.get(), game_device_data.current_depth_uav.get(), game_device_data.current_postfx_mask_uav.get()};
                      ID3D11Buffer* buffers[] = {game_device_data.viewport_cbv.get()};
                      ID3D11SamplerState* samplers[] = {game_device_data.depth_sampler.get()};
                      immediate_ctx->CSSetShader(device_data.native_compute_shaders[CompileTimeStringHash("Decode Motion Vector")].get(), nullptr, 0);
-                     immediate_ctx->CSSetShaderResources(0, 2, srvs);
+                     immediate_ctx->CSSetShaderResources(0, 5, srvs);
                      immediate_ctx->CSSetConstantBuffers(0, 1, buffers);
-                     immediate_ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+                     immediate_ctx->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
                      immediate_ctx->CSSetSamplers(0, 1, samplers);
                
                      immediate_ctx->Dispatch((m_viewportPrivateData->m_viewportSize[0] + 7) / 8, (m_viewportPrivateData->m_viewportSize[1] + 7) / 8, 1);
                      
                      uavs[0] = nullptr;
                      uavs[1] = nullptr;
+                     uavs[2] = nullptr;
                      srvs[0] = nullptr;
                      srvs[1] = nullptr;
+                     srvs[2] = nullptr;
+                     srvs[3] = nullptr;
                      buffers[0] = nullptr;
                      immediate_ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
                      immediate_ctx->CSSetShaderResources(0, 2, srvs);
@@ -1162,12 +1294,6 @@ public:
 #if DEBUG_LOG
                   reshade::log::message(reshade::log::level::info, "Resolving Post SR");
 #endif
-                  if (game_device_data.postfx_mask_rtv.get())
-                  {
-                     ID3D11Resource* mask_resource;
-                     game_device_data.postfx_mask_rtv->GetResource(&mask_resource);
-                     immediate_ctx->CopyResource(game_device_data.unjittered_postfx_mask.get(), mask_resource);
-                  }
                   SetLumaConstantBuffers(immediate_ctx.get(), cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
 
                   immediate_ctx->IAGetVertexBuffers(0,1,0,0,0);
@@ -1184,7 +1310,7 @@ public:
                   viewport.MinDepth = 0;
                   viewport.MaxDepth = 1;
                   immediate_ctx->RSSetViewports(1, &viewport); // Viewport is always needed
-                  ID3D11ShaderResourceView* srvs[] = {game_device_data.unjittered_depth_srv.get(), game_device_data.decoded_motion_vectors_srv.get(), game_device_data.unjittered_postfx_mask_srv.get()};
+                  ID3D11ShaderResourceView* srvs[] = {game_device_data.current_depth_srv.get(), game_device_data.decoded_motion_vectors_srv.get(), game_device_data.current_postfx_mask_srv.get()};
                   ID3D11RenderTargetView* rtvs[] = {m_deferredFXRendererContextTextures.m_motionVectors->m_texture->m_renderTargetView, game_device_data.postfx_mask_rtv.get()};
                   ID3D11Buffer* buffers[] = {game_device_data.viewport_cbv.get()};
                   ID3D11SamplerState* samplers[] = {game_device_data.depth_sampler.get()};
@@ -1294,7 +1420,18 @@ public:
             }
          }
       }
-
+      
+      {
+         std::stringstream s;
+         s << std::format("Is SMAA rendering: {}", bIsSMAARendering ? "true" : "false");
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+      
+         s.clear();
+         s.str("");
+         s << std::format("Is Deferred Antialiasing rendering: {}", bIsDeferredAntialiasingRendering ? "true" : "false");
+         reshade::log::message(reshade::log::level::info, s.str().c_str());
+      }
+      
       JitterUpdate(device_data.sr_type != SR::Type::None);
       
       if (!custom_texture_mip_lod_bias_offset && CDeferredFxAntialiasRenderer)
@@ -1319,11 +1456,14 @@ public:
          //std::lock_guard<std::mutex> lock(game_device_data.game_device_data_mutex);
          game_device_data.source_color.reset();
          game_device_data.source_color_srv.reset();
+         game_device_data.source_color_rtv.reset();
          game_device_data.viewport_cbv.reset();
          game_device_data.postfx_mask_rtv.reset();
          
          CDeferredFxAntialiasRenderer = 0;
          bIsNetHackingRendering = false;
+         bIsSMAARendering = false;
+         bIsDeferredAntialiasingRendering = false;
          m_deferredFXRendererContext = nullptr;
          m_viewportPrivateData = nullptr;
          m_viewportParamProvider = nullptr;
@@ -1337,6 +1477,7 @@ public:
          m_deferredFXRendererContextTextures.m_normalsTexture = nullptr;
          m_deferredFXRendererContextTextures.m_gBufferAOTexture = nullptr;
          m_deferredFXRendererContextTextures.m_fullAOTexture = nullptr;
+         m_deferredFXRendererContextTextures.m_sourceTexture = nullptr;
          
          motion_vector_contexts.clear();
          
@@ -1344,6 +1485,20 @@ public:
          game_device_data.skin_lookup.clear();
          std::swap(game_device_data.prev_skin_buffer, game_device_data.skin_buffer);
          game_device_data.skin_buffer->Reset();
+         
+         if (device_data.has_drawn_sr)
+         {
+            std::swap(game_device_data.previous_depth, game_device_data.current_depth);
+            std::swap(game_device_data.previous_depth_srv, game_device_data.current_depth_srv);
+            std::swap(game_device_data.previous_depth_uav, game_device_data.current_depth_uav);
+            std::swap(game_device_data.previous_postfx_mask, game_device_data.current_postfx_mask);
+            std::swap(game_device_data.previous_postfx_mask_srv, game_device_data.current_postfx_mask_srv);
+            std::swap(game_device_data.previous_postfx_mask_uav, game_device_data.current_postfx_mask_uav);
+         }
+         
+#if DEVELOPMENT
+         has_printed_dlss_skip_reason = false;
+#endif
       }
 
       if (!device_data.has_drawn_sr)
@@ -1593,6 +1748,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          0x2C3F4493,
          0x33C5E45E
       };
+      shader_hashes_SkyMoon.pixel_shaders = {
+         0xA16E9FBD,
+         0xDA6D8AA0, // temporal filtering version
+      };
 
 #if DEVELOPMENT
       forced_shader_names.emplace(Shader::Hash_StrToNum("74F79E89"), "Clean to Black");
@@ -1605,6 +1764,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(Shader::Hash_StrToNum("5554278D"), "SMAA");
       forced_shader_names.emplace(Shader::Hash_StrToNum("29C5D2F6"), "Temporal Accumulation");
       forced_shader_names.emplace(Shader::Hash_StrToNum("4053E8B2"), "Temporal Accumulation Resolve");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("C8873B8F"), "Water Grid Vector Map Update");
 #endif
 
       game = new WatchDogs2();
