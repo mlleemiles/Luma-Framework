@@ -797,7 +797,7 @@ float2 output_resolution = {0, 0};
 int counter = 0;
 bool is_search_mode_on = false;
 bool is_in_battle_mode = false;
-bool will_motion_blur_render = false;
+bool is_hatching_on = false;
 
 namespace
 {
@@ -813,6 +813,8 @@ namespace
    ShaderHashesList shader_hashes_dof_merge;
    ShaderHashesList shader_hashes_postfx_composite;
    ShaderHashesList shader_hashes_postfx_composite_with_depth;
+   
+   ShaderHashesList shader_hashes_L2P_vertex;
    
    CameraMatrices camera_matrices_current;
    CameraMatrices camera_matrices_previous;
@@ -832,6 +834,7 @@ namespace
       previous_rotation_matrix.r[1].m128_f32[3] = 0.0;
       previous_rotation_matrix.r[2].m128_f32[3] = 0.0;
       previous_rotation_matrix.r[3] = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+      previous_rotation_matrix = DirectX::XMMatrixTranspose(previous_rotation_matrix);
       
       DirectX::XMMATRIX current_rotation_matrix = current.inv_view_matrix;
       current_rotation_matrix.r[0].m128_f32[3] = 0.0;
@@ -839,16 +842,17 @@ namespace
       current_rotation_matrix.r[2].m128_f32[3] = 0.0;
       current_rotation_matrix.r[3] = DirectX::XMVectorSet(position_delta.x, position_delta.y, position_delta.z, 1.0f);
       
-      //LogXMMatrix("ProjectionMatrix", current.projection_matrix);
-      //LogXMMatrix("CurrentInvViewMatrix", current.inv_view_matrix);
-      //LogXMMatrix("PreviousInvViewMatrix", previous.inv_view_matrix);
-      //LogXMMatrix("CurrentInvViewMatrix_CurrWithDelta", current_rotation_matrix);
-      //LogXMMatrix("PreviousInvViewMatrix_PrevRotationOnly", previous_rotation_matrix);
+      DirectX::XMMATRIX temp = DirectX::XMMatrixMultiply(previous_rotation_matrix, previous.projection_matrix);
+      DirectX::XMMATRIX CameraSpaceToPreviousProjectedSpace = XMMatrixMultiply(current_rotation_matrix, temp);
       
-      DirectX::XMMATRIX temp = DirectX::XMMatrixMultiply(previous.projection_matrix, previous_rotation_matrix);
-      DirectX::XMMATRIX CameraSpaceToPreviousProjectedSpace = XMMatrixMultiply(temp, current_rotation_matrix);
-                  
-      //LogXMMatrix("CameraSpaceToPreviousProjectedSpace", CameraSpaceToPreviousProjectedSpace);
+      /*
+      LogXMMatrix("ProjectionMatrix", current.projection_matrix);
+      LogXMMatrix("CurrentInvViewMatrix", current.inv_view_matrix);
+      LogXMMatrix("PreviousInvViewMatrix", previous.inv_view_matrix);
+      LogXMMatrix("CurrentInvViewMatrix_CurrWithDelta", current_rotation_matrix);
+      LogXMMatrix("PreviousInvViewMatrix_PrevRotationOnly", previous_rotation_matrix);
+      LogXMMatrix("CameraSpaceToPreviousProjectedSpace", CameraSpaceToPreviousProjectedSpace);
+      */
       
       return CameraSpaceToPreviousProjectedSpace;
    }
@@ -1055,17 +1059,17 @@ public:
             PostEffectSearchModeRendererPrepare
             );
       }
-      /*
-      if (!g_motion_blur_hook)
+      
+      if (!g_postfx_hatching_hook)
       {
-         void* fn = reinterpret_cast<void*>(base_addr + 0x699C20);
+         void* fn = reinterpret_cast<void*>(base_addr + 0x259A30);
 
-         g_motion_blur_hook = safetyhook::create_inline(
+         g_postfx_hatching_hook = safetyhook::create_inline(
             fn,
-            PostEffectMotionBlurRendererPrepare
+            PostEffectHatchingRendererPrepare
             );
       }
-      */
+      
       if (!g_battle_mode_hook)
       {
          void* fn = reinterpret_cast<void*>(base_addr + 0x2EDBC0);
@@ -1251,7 +1255,7 @@ public:
          desc.Height = height;
          desc.Usage = D3D11_USAGE_DEFAULT;
          desc.ArraySize = 1;
-         desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+         desc.Format = DXGI_FORMAT_R16G16B16A16_TYPELESS;
          desc.SampleDesc.Count = 1;
          desc.SampleDesc.Quality = 0;
          desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -1322,14 +1326,29 @@ public:
       
       if (original_shader_hashes.Contains(shader_hashes_effect_merge))
       {
+         if (!game_device_data.has_copied_fog_to_main_rt)
+            return DrawOrDispatchOverrideType::None;
+         
+         if (game_device_data.has_drawn_upscaling)
+            return DrawOrDispatchOverrideType::None;
+         
          ComPtr<ID3D11RenderTargetView> render_target_views;
          native_device_context->OMGetRenderTargets(1, render_target_views.put(), nullptr);
          ComPtr<ID3D11Resource> resource;
          render_target_views->GetResource(resource.put());
-         resource->QueryInterface(game_device_data.source_color.put());
+         HRESULT hr = resource->QueryInterface(game_device_data.source_color.put());
+         if (FAILED(hr))
+         {
+            game_device_data.source_color = nullptr;
+            reshade::log::message(reshade::log::level::error, "Failed getting color texture");
+         }
          
          game_device_data.depth_texture_srv->GetResource(resource.put());
-         resource->QueryInterface(game_device_data.depth_texture.put());
+         hr = resource->QueryInterface(game_device_data.depth_texture.put());
+         if (FAILED(hr))
+         {
+            reshade::log::message(reshade::log::level::error, "Failed getting depth texture");
+         }
          
          game_device_data.source_color_rtv = render_target_views;
          
@@ -1481,7 +1500,7 @@ public:
             }
          }
       }
-      
+
       if (original_shader_hashes.Contains(shader_hashes_motion_blur))
       {
          /*
@@ -1644,7 +1663,7 @@ public:
             return DrawOrDispatchOverrideType::None;
          }
       }
-      
+
       if (game_device_data.frame_phase == FramePhase::GBUFFER || game_device_data.frame_phase == FramePhase::FORWARD)
       {
          //reshade::log::message(reshade::log::level::info, std::format("Current PS: 0x{:X}", original_shader_hashes.pixel_shaders[0]).c_str());
@@ -1654,6 +1673,13 @@ public:
          
          if (!original_shader_hashes.Contains(shader_hashes_vertex))
             return DrawOrDispatchOverrideType::None;
+         
+#if DEVELOPMENT
+         if (original_shader_hashes.Contains(shader_hashes_L2P_vertex))
+         {
+            Luma::OverlayLog::AddWarning(std::format("L2P Shader Drawing: 0x{:X}", original_shader_hashes.vertex_shaders[0]).c_str());
+         }
+#endif
          
          {
             ComPtr<ID3D11Buffer> vertex_cb;
@@ -1673,17 +1699,29 @@ public:
             */
             // Generally the slot 0, instance data at slot 8, sometimes slot 1
             ComPtr<ID3D11Buffer> vertex_buffer;
-            uint32_t stride;
-            native_device_context->IAGetVertexBuffers(0, 1, vertex_buffer.put(), &stride, nullptr);
+            //uint32_t stride;
+            native_device_context->IAGetVertexBuffers(0, 1, vertex_buffer.put(), nullptr, nullptr);
             /*
             D3D11_BUFFER_DESC bd;
             vertex_cb->GetDesc(&bd);
             */
             auto& cb_data = game_device_data.g_pending_cb_data[vertex_cb.get()];
-            auto* floats = reinterpret_cast<const float4*>(cb_data.cpu_data.data() + g_local_to_world_offset[original_shader_hashes.vertex_shaders[0]]);
-            float3 world_position = {floats[0].w, floats[1].w, floats[2].w};
+            
+            auto local_to_world_offset_it = g_local_to_world_offset.find(original_shader_hashes.vertex_shaders[0]);
+            float3 world_position = {0.0f, 0.0f, 0.0f};
+            if (local_to_world_offset_it != g_local_to_world_offset.end())
+            {
+               if (local_to_world_offset_it->second <= cb_data.cpu_data.size() - 16)
+               {
+                  auto* floats = reinterpret_cast<const float4*>(cb_data.cpu_data.data() + local_to_world_offset_it->second);
+                  world_position = {floats[0].w, floats[1].w, floats[2].w};
+               }
+            }
+            
             bool is_cb_dirty = cb_data.dirty;
             uint64_t draw_call_hash = HashDrawCall(original_shader_hashes.vertex_shaders[0], vertex_buffer.get(), max(last_draw_dispatch_data.index_count, last_draw_dispatch_data.vertex_count));
+            
+            
             // Cache all regardless due to potential hash collision
             // if (game_device_data.global_cbuffer_lookup.find(draw_call_hash) == game_device_data.global_cbuffer_lookup.cend())
             {
@@ -1803,69 +1841,18 @@ public:
                   else
                   {
                      if (SUCCEEDED(native_device_context->QueryInterface(ctx1.put())))
+                     {
                         game_device_data.ctx1_cache[native_device_context] = ctx1;
+                     }
                      else
                      {
-                        reshade::log::message(reshade::log::level::error, "context1 not supported.");
+                        //reshade::log::message(reshade::log::level::error, "context1 not supported.");
+                        Luma::OverlayLog::AddError("context1 not supported.");
                         return DrawOrDispatchOverrideType::None;
                      }
                   }
                   //reshade::log::message(reshade::log::level::info, std::format("First Constant: {}, Num Constants: {}", first_constant, num_constants).c_str());
                   ctx1->VSSetConstantBuffers1(5, 1, &cb, &first_constant, &num_constants);
-#if 0
-                  D3D11_MAPPED_SUBRESOURCE mapped_cbuffer;
-                  native_device_context->Map(cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_cbuffer);
-               
-                  if (prev_cb.size() == 1)
-                  {
-                     memcpy(
-                         mapped_cbuffer.pData,
-                      game_device_data.g_prev_shadow_memory.Data() + prev_cb[0].offset,
-                         prev_cb[0].size
-                     );
-                  }
-                  else
-                  {
-                     CBufferEntry* cache_data = nullptr;
-                     float shortest_distance = FLT_MAX;
-                     for (uint32_t i = 0; i < prev_cb.size(); ++i)
-                     {
-                        //float3 prev_world_position = prev_cb[i].world_position;
-                        //SIMD
-                        DirectX::XMFLOAT3 curr_pos(
-                            world_position.x,
-                            world_position.y,
-                            world_position.z
-                        );
-                        DirectX::XMFLOAT3 prev_pos(
-                            prev_cb[i].world_position.x,
-                            prev_cb[i].world_position.y,
-                            prev_cb[i].world_position.z
-                        );
-                        DirectX::XMVECTOR vCurr = XMLoadFloat3(&curr_pos);
-                        DirectX::XMVECTOR vPrev = XMLoadFloat3(&prev_pos);
-                        float dist = DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(DirectX::XMVectorSubtract(vCurr, vPrev)));
-                        /*float dist =   (world_position.x - prev_world_position.x) * (world_position.x - prev_world_position.x) +
-                                       (world_position.y - prev_world_position.y) * (world_position.y - prev_world_position.y) +
-                                       (world_position.z - prev_world_position.z) * (world_position.z - prev_world_position.z);*/
-                        if (dist == 0.0)
-                        {
-                           cache_data = &prev_cb[i];
-                           break;
-                        }
-                        if (dist < shortest_distance)
-                        {
-                           cache_data = &prev_cb[i];
-                           shortest_distance = dist;
-                        }
-                     }
-                     memcpy(
-                         mapped_cbuffer.pData,
-                      game_device_data.g_prev_shadow_memory.Data() + cache_data->offset,
-                         cache_data->size);
-                  }
-                  native_device_context->Unmap(cb, 0);
-#endif
                }
                // TODO: make a list of "static" vertex shader to check if they're wrong from last frame
                //if (original_shader_hashes.vertex_shaders[0] != 0xC51AD711)
@@ -1886,7 +1873,7 @@ public:
                if (pixel_cb.get() != nullptr && at_color_it != g_at_color_offset.end())
                {
                   cb_data = game_device_data.g_pending_cb_data[pixel_cb.get()];
-                  floats = reinterpret_cast<const float4*>(cb_data.cpu_data.data() + at_color_it->second);
+                  auto* floats = reinterpret_cast<const float4*>(cb_data.cpu_data.data() + at_color_it->second);
                   float alpha = floats[0].w;
                   if (alpha != 1.0f)
                   {
@@ -1938,11 +1925,11 @@ public:
             }
             
             //bool replace = false;
-            bool is_hatching = false;
+            bool is_hatching = is_hatching_on;
             
             if (is_gbuffer)
             {
-               //is_hatching = original_shader_hashes.Contains(shader_hashes_hatching_gbuffer);
+               is_hatching = is_hatching && original_shader_hashes.Contains(shader_hashes_hatching_gbuffer);
                //if (1)
                {
                   if (!is_hatching)
@@ -1990,23 +1977,8 @@ public:
             }
             else
             {
-               ComPtr<ID3D11Buffer> pixel_cb;
-               native_device_context->PSGetConstantBuffers(0, 1, pixel_cb.put());
                
-               auto at_color_it = g_at_color_offset.find(original_shader_hashes.pixel_shaders[0]);
-               
-               if (pixel_cb.get() != nullptr && at_color_it != g_at_color_offset.end())
-               {
-                  cb_data = game_device_data.g_pending_cb_data[pixel_cb.get()];
-                  floats = reinterpret_cast<const float4*>(cb_data.cpu_data.data() + at_color_it->second);
-                  float alpha = floats[0].w;
-                  if (alpha != 1.0f)
-                  {
-                     has_previous_input = false;
-                  }
-               }
-               
-               //is_hatching = original_shader_hashes.Contains(shader_hashes_hatching_forward);
+               is_hatching = is_hatching && original_shader_hashes.Contains(shader_hashes_hatching_forward);
                
                //if (1)
                {
@@ -2149,7 +2121,7 @@ public:
                game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
             }
 
-            if (!game_device_data.source_color || !game_device_data.depth_texture || device_data.sr_type == SR::Type::None)// || test_index == 5)
+            if (!game_device_data.source_color.get() || !game_device_data.depth_texture.get() || device_data.sr_type == SR::Type::None)// || test_index == 5)
             {
                if (is_search_mode_on)
                {
@@ -2198,13 +2170,22 @@ public:
             */
             
             {
+               // Unbind views to prevent resource hazard crash?
+               ID3D11ShaderResourceView* nullSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+               ID3D11RenderTargetView* nullRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+               native_device_context->PSSetShaderResources(0, device_data.uav_max_count, nullSRVs);
+               native_device_context->CSSetShaderResources(0, device_data.uav_max_count, nullSRVs);
+               native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, nullRTVs, nullptr);
+            }
+            
+            {
                SR::SuperResolutionImpl::DrawData draw_data;
                draw_data.source_color = game_device_data.source_color.get();
                draw_data.output_color = game_device_data.resolve_texture.get();
                draw_data.motion_vectors = game_device_data.decoded_motion_vectors.get();
                draw_data.depth_buffer = game_device_data.depth_texture.get();
-               draw_data.render_width = game_device_data.render_resolution.x;
-               draw_data.render_height = game_device_data.render_resolution.y;
+               draw_data.render_width = width;
+               draw_data.render_height = height;
                draw_data.pre_exposure = 0.0f;
                draw_data.jitter_x = -projection_jitters.x;
                draw_data.jitter_y = -projection_jitters.y;
@@ -2591,7 +2572,10 @@ public:
       
       if (device_data.sr_type == SR::Type::None)
          return;
-      
+#if 0      
+      if (device_data.shutting_down.load(std::memory_order_acquire))
+         return;
+#endif      
       ID3D11Buffer* buffer = nullptr;
       ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
 
@@ -2634,8 +2618,8 @@ public:
       {
          game_device_data.prev_view_projection_matrix = CameraData->view_projection_matrix;
          
-         camera_matrices_previous = camera_matrices_current;
-        // memcpy(&camera_matrices_previous, &camera_matrices_current, sizeof(CameraMatrices));
+         //camera_matrices_previous = camera_matrices_current;
+         memcpy(&camera_matrices_previous, &camera_matrices_current, sizeof(CameraMatrices));
       }
       
       ComPtr<ID3D11DeviceContext> context;
@@ -2690,7 +2674,7 @@ public:
          device_data.sr_suppressed = false;
          is_search_mode_on = false;
          is_in_battle_mode = false;
-         will_motion_blur_render = false;
+         is_hatching_on = false;
          
          if (game_device_data.search_mode_filter_render_state.dirty)
          {
@@ -2705,7 +2689,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       Globals::SetGlobals(PROJECT_NAME, "Blue Reflection Second Light Luma mod");
-      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
+      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::Playable;
       Globals::VERSION = 1;
 
       luma_settings_cbuffer_index = 13;
@@ -2720,7 +2704,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // which leads to game recalculating with jittery physics and stuttering
       // DOESN'T FIX STILL
       prevent_fullscreen_state = false;
-      force_borderless = true;
+      //force_borderless = true;
 
       swapchain_format_upgrade_type = TextureFormatUpgradesType::None;
       swapchain_upgrade_type = SwapchainUpgradeType::None;
@@ -3350,6 +3334,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 			// 0xAD4E28F9, //Voxelize_Shader
 			// 90BE487E, //Write_Indirect_Diffuse_and_fShadow_Value_Shader
 		};
+      shader_hashes_L2P_vertex.vertex_shaders = {
+         0x70F00C4A,
+         0xEDDCA1AE,
+         0xEA1841C3,
+         0xFA582144,
+         0x7F7BFEAA,
+         0xB14329A5,
+      };
       shader_hashes_copy_red.pixel_shaders = {
          0X5897B918,
       };
@@ -3752,7 +3744,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       g_active_camera_hook.reset();
       g_search_mode_hook.reset();
       g_battle_mode_hook.reset();
-      //g_motion_blur_hook.reset();
+      g_postfx_hatching_hook.reset();
       reshade::unregister_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(BlueReflectionSecondLight::OnBindRenderTargetsAndDepthStencil);
       reshade::unregister_event<reshade::addon_event::clear_render_target_view>(BlueReflectionSecondLight::OnClearRenderTargetView);
       reshade::unregister_event<reshade::addon_event::copy_texture_region>(BlueReflectionSecondLight::OnCopyTextureRegion);

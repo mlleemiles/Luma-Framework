@@ -311,6 +311,7 @@
     <ClInclude Include="includes\shader_names.h" />
     <ClInclude Include="includes\shader_patches.h" />
     <ClInclude Include="includes\stretchy_buffer.h" />
+    <ClInclude Include="includes\xxhash.h" />
     <ClInclude Include="includes\Zydis.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

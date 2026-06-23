@@ -1,0 +1,1 @@
+cl /EHsc /std:c++17 ".\shader_patch_offline.cpp" /Fo".\\" /Fe".\shader_patch_offline.exe" /link /MANIFEST:EMBED /MANIFESTUAC:"level='asInvoker' uiAccess='false'"

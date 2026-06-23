@@ -154,16 +154,15 @@ char __fastcall Hooked_BattleMainLoopIterate(__int64 a1)
     return original_result;
 }
 
-/*
-__int64 __fastcall PostEffectMotionBlurRendererPrepare(__int64 a1)
-{
-auto original_result = g_motion_blur_hook
-.unsafe_call<__int64>(a1);
-    
-reshade::log::message(reshade::log::level::info, "Motion Blur Draw: On");
 
-will_motion_blur_render = true;
-    
-return original_result;
+__int64 __fastcall PostEffectHatchingRendererPrepare(__int64 a1, float a2)
+{
+    auto original_result = g_postfx_hatching_hook
+    .unsafe_call<__int64>(a1, a2);
+        
+    //reshade::log::message(reshade::log::level::info, "Hatching: On");
+
+    is_hatching_on = true;
+        
+    return original_result;
 }
-*/
