@@ -961,6 +961,35 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
       frame_color_texture.reset();
       frame_color_texture_srv.reset();
    }
+   
+   void Destroy()
+   {
+      // Atomics holding raw COM pointers
+      if (auto* cmd = remainder_command_list.exchange(nullptr))
+         cmd->Release();
+
+      if (auto* ctx = draw_device_context.exchange(nullptr))
+         ctx->Release();
+
+      CleanMVResources();
+
+      source_color.reset();
+      source_color_srv.reset();
+      source_color_rtv.reset();
+
+      postfx_source_color.reset();
+      postfx_source_color_srv.reset();
+
+      depth_texture.reset();
+      depth_texture_srv.reset();
+
+      partial_command_list.reset();
+      pre_search_mode_command_list.reset();
+      post_search_mode_command_list.reset();
+
+      modifiable_vertex_buffer.reset();
+      modifiable_inedx_buffer.reset();
+   }
 };
 
 class BlueReflectionSecondLight final : public Game
@@ -2681,6 +2710,14 @@ public:
             game_device_data.search_mode_filter_render_state.Reset();
          }
       }
+   }
+   
+   void OnDestroyDeviceData(DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+
+      game_device_data.Destroy();
+      Game::OnDestroyDeviceData(device_data);
    }
 };
 
