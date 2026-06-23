@@ -962,6 +962,7 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
       frame_color_texture_srv.reset();
    }
    
+
    void Destroy(DeviceData& device_data)
    {
       // Atomics holding raw COM pointers
@@ -989,7 +990,7 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
 
       modifiable_vertex_buffer.reset();
       modifiable_inedx_buffer.reset();
-      
+
       // Manually release upgraded samplers to avoid hang
       if (enable_samplers_upgrade)
       {
@@ -2727,8 +2728,9 @@ public:
    void OnDestroyDeviceData(DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-
+      
       game_device_data.Destroy(device_data);
+      
       Game::OnDestroyDeviceData(device_data);
    }
 };
