@@ -788,6 +788,11 @@ namespace
       std::unordered_set<uint32_t> dumped_shaders;
       std::unordered_set<uint32_t> meta_stored_shaders;
       std::filesystem::path shaders_dump_path;
+#if ALLOW_SHADERS_DUMPING_WITH_NAME
+      // Shader debug names from SetDebugName
+      std::unordered_map<uint32_t, std::string> shader_debug_names;
+#endif
+      
 #if DEVELOPMENT
       std::unordered_map<uint32_t, std::filesystem::path> dumped_shaders_meta_paths;
       uint32_t shader_cache_count = 0;
@@ -4856,6 +4861,27 @@ namespace
          {
             cached_pipeline_shader_hash = cached_pipeline->shader_hashes[0];
          }
+         
+#if ALLOW_SHADERS_DUMPING_WITH_NAME && ALLOW_SHADERS_DUMPING
+         if (cached_pipeline != nullptr && cached_pipeline_shader_hash != 0)
+         {
+            bool has_name;
+            {
+               const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
+               has_name = shader_debug_names.contains(cached_pipeline_shader_hash);
+            }
+
+            if (!has_name && cached_pipeline->pipeline.handle != 0)
+            {
+               std::optional<std::string> optional_name = GetD3DNameW(reinterpret_cast<ID3D11DeviceChild*>(cached_pipeline->pipeline.handle));
+               if (optional_name.has_value() && !optional_name->empty())
+               {
+                  const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
+                  shader_debug_names[cached_pipeline_shader_hash] = std::move(optional_name.value());
+               }
+            }
+         }
+#endif
       }
 
       // Matches "reshade::addon_event::reset_command_list" (sometimes this is called instead of that)
@@ -10476,6 +10502,59 @@ namespace
          ForceToggleShaders(runtime, true); // This will load and recompile all shaders (there's no need to delete the previous pre-compiled cache)
       }
    }
+   
+   // Replaces characters illegal for a Windows filename with "_"
+   inline std::string SanitizeFileNameComponent(std::string name, size_t max_length = 96)
+   {
+      for (auto& c : name)
+      {
+         switch (c)
+         {
+         case '<': case '>': case ':': case '"': case '/': case '\\': case '|': case '?': case '*':
+            c = '_';
+            break;
+         default:
+            if (static_cast<unsigned char>(c) < 0x20) // Control characters
+            {
+               c = '_';
+            }
+            break;
+         }
+      }
+
+      while (!name.empty() && (name.back() == ' ' || name.back() == '.'))
+      {
+         name.pop_back();
+      }
+
+      if (name.length() > max_length)
+      {
+         name.resize(max_length);
+         while (!name.empty() && (name.back() == ' ' || name.back() == '.'))
+         {
+            name.pop_back();
+         }
+      }
+
+      static const std::unordered_set<std::string> reserved_names = {
+         "CON", "PRN", "AUX", "NUL",
+         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+      };
+      std::string upper_name = name;
+      for (auto& c : upper_name)
+      {
+         if (c >= 'a' && c <= 'z') c -= 32;
+      }
+      const auto dot_pos = upper_name.find('.');
+      const std::string base_name = dot_pos == std::string::npos ? upper_name : upper_name.substr(0, dot_pos);
+      if (reserved_names.contains(base_name))
+      {
+         name += "_";
+      }
+
+      return name;
+   }
 
 #pragma optimize("t", on) // Temporarily override optimization, this function is too slow in debug otherwise (comment this out if ever needed)
    // Expects "s_mutex_dumping"
@@ -10496,8 +10575,23 @@ namespace
             return;
          }
       }
+      
+      std::string dump_file_name;
+#if ALLOW_SHADERS_DUMPING_WITH_NAME
+      std::string shader_debug_name;
+      if (auto it = shader_debug_names.find(shader_hash); it != shader_debug_names.end())
+      {
+         shader_debug_name = it->second;
+      }
+      
+      if (!shader_debug_name.empty())
+      {
+         dump_file_name = SanitizeFileNameComponent(shader_debug_name) + "_";
+      }
+#endif
+      dump_file_name += Shader::Hash_NumToStr(shader_hash, true);
 
-      dump_path /= Shader::Hash_NumToStr(shader_hash, true);
+      dump_path /= dump_file_name;
 
       // Automatically append the shader type and version
       if (!cached_shader->type_and_version.empty())
